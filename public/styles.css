@@ -320,6 +320,62 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 }
 
 .review-stage .grade-row { grid-column: 2; }
+.grade-row[hidden] { display: none; }
+
+/* ---- card flip ---- */
+
+.card-flip {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  cursor: default;
+  perspective: 1200px;
+}
+
+.card-flip.revealable { cursor: pointer; }
+
+.card-flip-inner {
+  position: relative;
+  display: grid;
+  width: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.55s cubic-bezier(0.35, 0.1, 0.2, 1);
+}
+
+.card-flip.flipped .card-flip-inner { transform: rotateY(180deg); }
+
+.card-face {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 30px 26px;
+  min-height: 190px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.card-flip.revealable:hover .card-face { border-color: var(--accent); }
+.card-flip:focus-visible { outline: none; }
+.card-flip:focus-visible .card-face {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.face-back { transform: rotateY(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .card-flip-inner { transition: none; }
+}
 
 .card-arrow {
   width: 46px;
