@@ -163,26 +163,37 @@ function renderReview() {
   area.innerHTML = `
     <div class="review-stage">
       <button class="card-arrow" id="card-prev" title="Previous card (←)" aria-label="Previous card" ${arrowsOff}>‹</button>
-      <button class="card-face${s.revealed ? '' : ' revealable'}" id="card-face">
-        <div class="card-front">${esc(card.front)}</div>
-        ${s.revealed
-          ? `<div class="card-back">${esc(card.back)}</div>`
-          : '<div class="micro-label">Tap to reveal · space</div>'}
+      <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
+        <div class="card-flip-inner">
+          <div class="card-face face-front" aria-hidden="${s.revealed}">
+            <div class="card-front">${esc(card.front)}</div>
+            <div class="micro-label">Tap to reveal · space</div>
+          </div>
+          <div class="card-face face-back" aria-hidden="${!s.revealed}">
+            <div class="card-front">${esc(card.front)}</div>
+            <div class="card-back">${esc(card.back)}</div>
+          </div>
+        </div>
       </button>
       <button class="card-arrow" id="card-next" title="Next card (→)" aria-label="Next card" ${arrowsOff}>›</button>
-      ${s.revealed
-        ? `<div class="grade-row">
-            <button class="btn-grade btn-again" id="grade-again" title="Back in 10 minutes (key: 1)">Again</button>
-            <button class="btn-grade btn-got" id="grade-got" title="Streak climbs the interval ladder (key: 2)">Got it</button>
-          </div>`
-        : ''}
+      <div class="grade-row" ${s.revealed ? '' : 'hidden'}>
+        <button class="btn-grade btn-again" id="grade-again" title="Back in 10 minutes (key: 1)">Again</button>
+        <button class="btn-grade btn-got" id="grade-got" title="Streak climbs the interval ladder (key: 2)">Got it</button>
+      </div>
     </div>`;
 }
 
 function reveal() {
   if (state.session.complete || state.session.revealed || !state.session.queue.length) return;
   state.session.revealed = true;
-  renderReview();
+  // Flip in place — a re-render here would cut the CSS transition short.
+  const face = $('#card-face');
+  if (!face) return;
+  face.classList.add('flipped');
+  face.classList.remove('revealable');
+  face.querySelector('.face-front').setAttribute('aria-hidden', 'true');
+  face.querySelector('.face-back').setAttribute('aria-hidden', 'false');
+  $('#review-area .grade-row').hidden = false;
 }
 
 async function grade(kind) {
