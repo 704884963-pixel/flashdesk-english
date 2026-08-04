@@ -39,8 +39,7 @@ On first run the server seeds 26 sample cards (an AI-901 exam prep deck defined 
 
 ## Screenshot
 
-<!-- TODO: add screenshot of the review view -->
-<!-- ![FlashDesk review view](docs/screenshot.png) -->
+![FlashDesk review view: a flipped card showing the answer and grade buttons](docs/screenshot.jpg)
 
 ## Design notes
 
