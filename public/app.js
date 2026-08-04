@@ -172,6 +172,7 @@ function renderReview() {
           <div class="card-face face-back" aria-hidden="${!s.revealed}">
             <div class="card-front">${esc(card.front)}</div>
             <div class="card-back">${esc(card.back)}</div>
+            <div class="micro-label">Tap to flip back · space</div>
           </div>
         </div>
       </button>
@@ -183,17 +184,27 @@ function renderReview() {
     </div>`;
 }
 
-function reveal() {
-  if (state.session.complete || state.session.revealed || !state.session.queue.length) return;
-  state.session.revealed = true;
+function setFlipped(flipped) {
   // Flip in place — a re-render here would cut the CSS transition short.
   const face = $('#card-face');
   if (!face) return;
-  face.classList.add('flipped');
-  face.classList.remove('revealable');
-  face.querySelector('.face-front').setAttribute('aria-hidden', 'true');
-  face.querySelector('.face-back').setAttribute('aria-hidden', 'false');
-  $('#review-area .grade-row').hidden = false;
+  state.session.revealed = flipped;
+  face.classList.toggle('flipped', flipped);
+  face.classList.toggle('revealable', !flipped);
+  face.querySelector('.face-front').setAttribute('aria-hidden', String(flipped));
+  face.querySelector('.face-back').setAttribute('aria-hidden', String(!flipped));
+  $('#review-area .grade-row').hidden = !flipped;
+}
+
+function reveal() {
+  if (state.session.complete || state.session.revealed || !state.session.queue.length) return;
+  setFlipped(true);
+}
+
+function toggleFlip() {
+  const s = state.session;
+  if (s.complete || !s.queue.length) return;
+  setFlipped(!s.revealed);
 }
 
 async function grade(kind) {
@@ -528,7 +539,7 @@ function bindEvents() {
   $('#review-area').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.id === 'card-face') reveal();
+    if (b.id === 'card-face') toggleFlip();
     else if (b.id === 'card-prev') stepCard(-1);
     else if (b.id === 'card-next') stepCard(1);
     else if (b.id === 'grade-again') grade('again');
@@ -547,7 +558,7 @@ function bindEvents() {
     if (e.key === ' ') {
       if (e.target.matches('button')) return; // native activation covers it
       e.preventDefault();
-      reveal();
+      toggleFlip();
     } else if (e.key === 'ArrowLeft') {
       stepCard(-1);
     } else if (e.key === 'ArrowRight') {

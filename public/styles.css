@@ -336,7 +336,8 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   perspective: 1200px;
 }
 
-.card-flip.revealable { cursor: pointer; }
+.card-flip.revealable,
+.card-flip.flipped { cursor: pointer; }
 
 .card-flip-inner {
   position: relative;
@@ -364,7 +365,8 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   -webkit-backface-visibility: hidden;
 }
 
-.card-flip.revealable:hover .card-face { border-color: var(--accent); }
+.card-flip.revealable:hover .card-face,
+.card-flip.flipped:hover .card-face { border-color: var(--accent); }
 .card-flip:focus-visible { outline: none; }
 .card-flip:focus-visible .card-face {
   border-color: var(--accent);
