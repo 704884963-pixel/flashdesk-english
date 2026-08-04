@@ -1,0 +1,9 @@
+{
+  "name": "flashdesk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local spaced-repetition flashcards",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

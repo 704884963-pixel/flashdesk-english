@@ -1,0 +1,14 @@
+# Dependencies (none today, but keep the guard)
+node_modules/
+
+# Personal card data and review history. The repo ships seed data only;
+# the server regenerates this file from seed.js on first run.
+flashdesk-data.json
+flashdesk-data.json.tmp
+flashdesk-data.corrupt-*.json
+
+# Logs
+*.log
+
+# OS noise
+.DS_Store

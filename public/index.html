@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlashDesk</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="wordmark">
+        <h1>Flash<span class="accent">Desk</span></h1>
+        <div class="micro-label">Spaced repetition</div>
+      </div>
+      <nav class="nav">
+        <button class="btn tab" data-view="review">Review</button>
+        <button class="btn tab" data-view="quiz">Quiz</button>
+        <button class="btn tab" data-view="add">Add Card</button>
+        <button class="btn tab" data-view="browse">Browse</button>
+        <label class="deck-filter">
+          <span class="micro-label">Deck</span>
+          <select id="deck-filter"></select>
+        </label>
+      </nav>
+    </header>
+
+    <section id="view-review" hidden>
+      <div class="review-top">
+        <div class="micro-label" id="due-count"></div>
+      </div>
+      <div id="review-area"></div>
+    </section>
+
+    <section id="view-quiz" hidden>
+      <div id="quiz-area"></div>
+    </section>
+
+    <section id="view-add" hidden>
+      <form id="add-form" class="panel form-panel">
+        <label class="field">
+          <span class="micro-label">Front</span>
+          <textarea id="add-front" rows="3" required></textarea>
+        </label>
+        <label class="field">
+          <span class="micro-label">Back</span>
+          <textarea id="add-back" rows="3" required></textarea>
+        </label>
+        <label class="field">
+          <span class="micro-label">Deck</span>
+          <input id="add-deck" list="deck-names" value="AI-901" required>
+          <datalist id="deck-names"></datalist>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Add card</button>
+          <span id="add-flash" class="micro-label flash" hidden>Added ✓</span>
+        </div>
+      </form>
+    </section>
+
+    <section id="view-browse" hidden>
+      <div class="browse-toolbar">
+        <div class="micro-label" id="browse-count"></div>
+        <button class="btn" id="copy-stats-browse">Copy stats for Claude</button>
+      </div>
+      <div class="panel table-panel">
+        <div class="table-wrap">
+          <table id="browse-table">
+            <thead>
+              <tr>
+                <th>Front</th>
+                <th>Back</th>
+                <th>Deck</th>
+                <th>Due</th>
+                <th>Streak</th>
+                <th>Lapses</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <pre id="stats-fallback" class="stats-pre" hidden></pre>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
