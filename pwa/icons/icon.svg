@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#10142b"/>
+  <!-- back card, tilted -->
+  <rect x="118" y="128" width="276" height="196" rx="26"
+        fill="#1b2140" stroke="#2e3560" stroke-width="10"
+        transform="rotate(-8 256 226)"/>
+  <!-- front card -->
+  <rect x="118" y="188" width="276" height="196" rx="26"
+        fill="#222950" stroke="#6fd3e0" stroke-width="12"/>
+  <!-- divider line, like the revealed answer rule -->
+  <line x1="158" y1="286" x2="354" y2="286" stroke="#2e3560" stroke-width="10" stroke-linecap="round"/>
+  <!-- prompt dash (front) -->
+  <rect x="158" y="228" width="140" height="22" rx="11" fill="#e9eaf6"/>
+  <!-- answer dash (back), cyan = the accent voice -->
+  <rect x="158" y="316" width="196" height="22" rx="11" fill="#6fd3e0"/>
+</svg>

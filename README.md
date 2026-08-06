@@ -2,6 +2,8 @@
 
 A local spaced-repetition flashcard web app built with zero npm dependencies. One Node process serves a vanilla JS front end and a small JSON API, and persists everything to a single JSON file next to the server.
 
+It also ships as an **offline-first PWA**: the same UI with a localStorage adapter instead of the server, installable on a phone from https://apicad.github.io/flashdesk/ (Share → Add to Home Screen on iOS). After the first load it works with no network at all; cards and review state live on the device, with JSON export/import in the Browse tab for backup and transfer.
+
 **Features**
 
 - **Review mode** with tap-to-reveal cards, previous/next navigation, and two-button grading ("Again" / "Got it"). Full keyboard support: space to reveal, arrow keys to move, 1/2 or Enter to grade.
@@ -36,6 +38,20 @@ node server.js
 Then open http://localhost:5902.
 
 On first run the server seeds 26 sample cards (an AI-901 exam prep deck defined in `seed.js`) and creates `flashdesk-data.json`. That data file is gitignored; delete it any time to reset to the seed deck. Note that finished sessions are logged to `~/drills/log.txt` in your home directory.
+
+## The PWA build
+
+`docs/` is the static offline build, served by GitHub Pages. It is generated — never edit it by hand:
+
+```sh
+node build.js   # or: npm run build
+```
+
+The build copies `public/` into `docs/`, swaps in `pwa/store-local.js` as the storage adapter (localStorage + the same scheduling logic), injects the PWA head tags, bakes the current cards from `flashdesk-data.json` into `seed-data.js` (fronts and backs only, fresh review state), and stamps the service worker's cache name with a content hash so every deploy updates cleanly.
+
+Deploy flow: edit `public/` or `pwa/` → `node build.js` → commit `docs/` → push. The site updates in a minute or two; an installed PWA picks the new version up on its next launch with network (a toast says when an update arrived).
+
+Phone and desktop keep separate review state on purpose. To move cards either way, use Export / Import in the Browse tab of the PWA: it accepts a full export (replace) or a plain `[{front, back, deck}]` list (merge, duplicates skipped).
 
 ## Screenshot
 

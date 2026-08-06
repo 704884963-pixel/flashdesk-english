@@ -1,2 +1,3 @@
 flashdesk-data.json
 *.corrupt-*.json
+.DS_Store

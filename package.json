@@ -4,6 +4,7 @@
   "private": true,
   "description": "Local spaced-repetition flashcards",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node build.js"
   }
 }
