@@ -219,5 +219,105 @@ window.FLASHDESK_SEED = [
     "front": "AI that reasons over a request, uses connected tools, and completes multi-step tasks",
     "back": "Agentic AI",
     "deck": "AI-901"
+  },
+  {
+    "front": "Fluent RAG answer contains a wrong fact. What do you check FIRST?",
+    "back": "Whether the correct, current passage was retrieved and supplied as context (retrieval before generation)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Why are large documents divided into chunks before indexing in RAG?",
+    "back": "So retrieval returns focused passages that fit efficiently into a prompt",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Search that finds 'company travel costs' when the query says 'business trip expenses'",
+    "back": "Semantic vector search (matches meaning, not exact words)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "RAG stands for and does what?",
+    "back": "Retrieval-augmented generation: retrieves relevant info from a data source and adds it to the prompt to ground the response",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Hybrid search combines which two approaches?",
+    "back": "Keyword search + vector search",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Stemming vs lemmatization",
+    "back": "Stemming chops endings (powering→power); lemmatization uses linguistic rules to reach a valid dictionary form (running→run)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Technique representing text as word-frequency vectors, ignoring grammar and order, often fed to Naive Bayes",
+    "back": "Bag-of-words",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Graph-based unsupervised algorithm ranking sentences for extractive summarization",
+    "back": "TextRank",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Most common speech-recognition feature extraction technique mimicking human hearing",
+    "back": "MFCC (Mel-Frequency Cepstral Coefficients)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Speech recognition order: what comes after acoustic model predicts phonemes?",
+    "back": "Language model applies vocabulary/grammar → decoding (beam search) picks best word sequence → post-processing formats text",
+    "deck": "AI-901"
+  },
+  {
+    "front": "In speech synthesis, what makes output sound natural vs robotic?",
+    "back": "Prosody (pitch, duration, stress, pauses); robotic speech = flat prosody, not bad phonemes",
+    "deck": "AI-901"
+  },
+  {
+    "front": "G2P conversion in speech synthesis",
+    "back": "Grapheme-to-phoneme: maps written letters to pronunciation sounds (though/through/cough)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "First stage of speech synthesis that turns 'Dr.' into 'Doctor' and '3' into 'three'",
+    "back": "Text normalization",
+    "deck": "AI-901"
+  },
+  {
+    "front": "In a CNN, what do filter layers produce from images?",
+    "back": "Feature maps: numeric features fed into the neural network for label prediction",
+    "deck": "AI-901"
+  },
+  {
+    "front": "How does a Vision Transformer (ViT) process images?",
+    "back": "Extracts patches of pixel values, uses attention to create contextual embeddings between patches",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Technique behind most modern image generation, starting from noise and refining iteratively",
+    "back": "Diffusion",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Sentiment analysis belongs to which category (trap!)",
+    "back": "NLP text classification. NOT conversational AI (that's interactive dialogue like chatbots)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "'Extract fields from documents WITHOUT labeling training data' points to which service?",
+    "back": "Content Understanding (labeled samples = Document Intelligence)",
+    "deck": "AI-901"
+  },
+  {
+    "front": "Generative AI's role in field extraction",
+    "back": "Schema-based extraction: give the LLM document text + a schema, it matches values to fields semantically",
+    "deck": "AI-901"
+  },
+  {
+    "front": "N-gram, bigram, trigram",
+    "back": "Multi-word phrase units: 1, 2, and 3-word sequences treated as single tokens for analysis",
+    "deck": "AI-901"
   }
 ];
