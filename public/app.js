@@ -23,11 +23,21 @@ function freshSession() {
     correct: 0,
     again: 0,
     gradedIds: new Set(),
+    picks: {}, // mixed-direction memo: 'idA|idB' -> shown card id, stable per session
     complete: false,
     logged: null, // null = pending, true/false = /api/session outcome
   };
 }
 state.session = freshSession();
+
+const DIRECTIONS = ['keyword', 'description', 'mixed'];
+state.direction = (() => {
+  try {
+    const d = localStorage.getItem('flashdesk-direction');
+    return DIRECTIONS.includes(d) ? d : 'mixed';
+  } catch { return 'mixed'; }
+})();
+state.twinMap = new Map();
 
 /* ---------- helpers ---------- */
 
@@ -87,11 +97,18 @@ function renderDeckControls() {
 
 function buildQueue() {
   const s = state.session;
-  s.queue = state.cards
-    .filter((c) => inFilter(c) && dueNow(c))
-    .sort((a, b) => a.due - b.due)
-    .map((c) => c.id);
+  const pool = state.cards.filter(inFilter);
+  state.twinMap = FlashLogic.buildTwinMap(pool);
+  s.queue = FlashLogic.reviewQueue(pool, Date.now(), state.direction, s.picks);
   if (s.pos >= s.queue.length) s.pos = 0;
+  renderDirSwitch();
+}
+
+function renderDirSwitch() {
+  const el = $('#dir-switch');
+  el.hidden = state.twinMap.size === 0; // nothing to switch without pairs
+  el.querySelectorAll('.dir-opt').forEach((b) =>
+    b.classList.toggle('active', b.dataset.dir === state.direction));
 }
 
 function stepCard(dir) {
@@ -545,6 +562,16 @@ function bindEvents() {
   $('#deck-filter').addEventListener('change', (e) => {
     state.deckFilter = e.target.value;
     switchView(state.view); // resets any in-progress session against the new filter
+  });
+
+  $('#dir-switch').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dir]');
+    if (!b || b.dataset.dir === state.direction) return;
+    state.direction = b.dataset.dir;
+    try { localStorage.setItem('flashdesk-direction', state.direction); } catch { /* private mode */ }
+    state.session = freshSession(); // orientation changes the queue — start clean
+    buildQueue();
+    renderReview();
   });
 
   $('#review-area').addEventListener('click', (e) => {
