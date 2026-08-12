@@ -321,7 +321,8 @@ async function copyStats(btn, fallbackPre) {
 
 /* ---------- quiz ---------- */
 
-const QUIZ_SIZE = 10;
+const QUIZ_LENGTHS = [10, 20, 'All'];
+const DEFAULT_QUIZ_SIZE = 20;
 
 function shuffle(arr) {
   const a = arr.slice();
@@ -333,14 +334,15 @@ function shuffle(arr) {
 }
 
 function freshQuiz() {
-  return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null };
+  return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null, size: DEFAULT_QUIZ_SIZE };
 }
 
 function startQuiz() {
   const q = state.quiz;
   const pool = state.cards.filter(inFilter);
   if (pool.length < 4) return;
-  q.questions = shuffle(pool).slice(0, QUIZ_SIZE).map((card) => {
+  const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
+  q.questions = shuffle(pool).slice(0, count).map((card) => {
     const distractors = shuffle(
       [...new Set(pool.filter((c) => c.id !== card.id).map((c) => c.back))].filter((b) => b !== card.back)
     ).slice(0, 3);
@@ -412,12 +414,20 @@ function renderQuiz() {
         </div>`;
       return;
     }
-    const n = Math.min(QUIZ_SIZE, pool.length);
     area.innerHTML = `
       <div class="panel quiz-start">
         <div class="micro-label">Quiz · ${esc(deckLabel())}</div>
-        <p>${n} multiple-choice questions, drawn at random from the deck.</p>
-        <p class="muted">Missed cards go straight back into your Review queue.</p>
+        <p>Pick the definition that matches the word. Questions are drawn at random; missed cards go straight back into your Review queue.</p>
+        <div class="quiz-length">
+          <span class="micro-label">Length</span>
+          <div class="quiz-length-opts">
+            ${QUIZ_LENGTHS.map((len) => {
+              const active = q.size === len ? ' active' : '';
+              const label = len === 'All' ? `All (${pool.length})` : len;
+              return `<button class="quiz-len${active}" data-size="${len}">${label}</button>`;
+            }).join('')}
+          </div>
+        </div>
         <button class="btn btn-primary" id="quiz-start-btn">Start quiz</button>
       </div>`;
     return;
@@ -436,7 +446,7 @@ function renderQuiz() {
             if (choice === question.correct) cls += ' correct';
             else if (i === q.answered) cls += ' wrong';
           }
-          return `<button class="${cls}" data-choice="${i}" ${answered ? 'disabled' : ''}>${esc(choice)}</button>`;
+          return `<button class="${cls}" data-choice="${i}" ${answered ? 'disabled' : ''}><span class="quiz-key">${i + 1}</span><span class="quiz-choice-text">${esc(choice)}</span></button>`;
         }).join('')}
       </div>
       ${answered
@@ -555,13 +565,36 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener('keydown', (e) => {
+    if (state.view !== 'quiz') return;
+    if (e.target.matches('input, textarea, select')) return;
+    const q = state.quiz;
+    if (!q || q.phase !== 'question') return;
+    if (q.answered === null) {
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1 && n <= q.questions[q.idx].choices.length) {
+        e.preventDefault();
+        answerQuiz(n - 1);
+      }
+    } else if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') {
+      if (e.target.matches('button')) return; // native button activation handles it
+      e.preventDefault();
+      nextQuizQuestion();
+    }
+  });
+
   $('#quiz-area').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.id === 'quiz-start-btn') startQuiz();
+    if (b.dataset.size !== undefined) {
+      state.quiz.size = b.dataset.size === 'All' ? 'All' : Number(b.dataset.size);
+      renderQuiz();
+    } else if (b.id === 'quiz-start-btn') startQuiz();
     else if (b.id === 'quiz-next') nextQuizQuestion();
     else if (b.id === 'quiz-restart') {
+      const size = state.quiz.size;
       state.quiz = freshQuiz();
+      state.quiz.size = size;
       renderQuiz();
     } else if (b.dataset.choice !== undefined) answerQuiz(Number(b.dataset.choice));
   });
