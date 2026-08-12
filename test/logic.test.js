@@ -97,3 +97,12 @@ test('rankDistractors excludes the item itself and duplicate definitions', () =>
   assert.equal(new Set(defs).size, defs.length);
   assert.equal(ranked[0].cardId, '2');
 });
+
+test('rankDistractors drops candidates that name the asked term', () => {
+  const seg = { cardId: 's1', term: 'Segmentation', definition: 'Outlines the object at the pixel level' };
+  const segScenario = { cardId: 's2', term: 'Segmentation is the pixel-level outline', definition: 'Marketing needs the exact pixel outline of the product' };
+  const segMention = { cardId: 's3', term: 'Some other card', definition: 'Unlike segmentation, detection draws a box around the object' };
+  const det = { cardId: 's4', term: 'Object detection', definition: 'Labels an object AND locates it with a bounding box' };
+  const ranked = rankDistractors([seg, segScenario, segMention, det], seg, 6);
+  assert.deepEqual(ranked.map((p) => p.cardId), ['s4']);
+});

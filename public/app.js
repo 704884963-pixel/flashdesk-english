@@ -390,9 +390,20 @@ function startQuiz() {
   if (pool.length < 4) return;
   const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
   q.questions = shuffle(pool).slice(0, count).map((item) => {
-    const distractors = shuffle(
-      [...new Set(pool.filter((p) => p.cardId !== item.cardId).map((p) => p.definition))].filter((d) => d !== item.definition)
-    ).slice(0, 3);
+    // Hardest plausible options: top-6 most similar definitions, pick 3 at
+    // random (keeps repeat quizzes varied). Random fill only if the deck has
+    // fewer than 3 related items.
+    const distractors = shuffle(FlashLogic.rankDistractors(pool, item, 6))
+      .slice(0, 3)
+      .map((p) => p.definition);
+    if (distractors.length < 3) {
+      for (const p of shuffle(pool)) {
+        if (distractors.length >= 3) break;
+        if (p.cardId === item.cardId) continue;
+        if (p.definition === item.definition || distractors.includes(p.definition)) continue;
+        distractors.push(p.definition);
+      }
+    }
     return { cardId: item.cardId, front: item.term, correct: item.definition, choices: shuffle([item.definition, ...distractors]) };
   });
   q.phase = 'question';

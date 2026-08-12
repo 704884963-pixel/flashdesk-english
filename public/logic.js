@@ -84,13 +84,19 @@
     return jaccard + 0.1 * lenRatio;
   }
 
-  // Top-n most similar pool items to `item`, excluding item itself and
-  // duplicate/identical definitions, best first.
+  // Top-n most similar pool items to `item`, excluding item itself,
+  // duplicate/identical definitions, and any candidate that NAMES the asked
+  // term — a vocab deck plus scenario cards about the same fact would
+  // otherwise put a second correct answer on screen. Best first.
   function rankDistractors(pool, item, n) {
     const seenDefs = new Set([item.definition]);
+    const itemTerm = norm(item.term);
+    const namesTerm = (p) => itemTerm.length > 3
+      && (norm(p.term).includes(itemTerm) || norm(p.definition).includes(itemTerm));
     return pool
       .filter((p) => {
         if (p.cardId === item.cardId || seenDefs.has(p.definition)) return false;
+        if (namesTerm(p)) return false;
         seenDefs.add(p.definition);
         return true;
       })
