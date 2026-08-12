@@ -6,8 +6,8 @@ It also ships as an **offline-first PWA**: the same UI with a localStorage adapt
 
 **Features**
 
-- **Review mode** with tap-to-reveal cards, previous/next navigation, and two-button grading ("Again" / "Got it"). Full keyboard support: space to reveal, arrow keys to move, 1/2 or Enter to grade.
-- **Quiz mode**: 10 multiple-choice questions per round, with distractors drawn from other cards in the same deck. Missed cards go straight back into the review queue.
+- **Review mode** with tap-to-reveal cards, previous/next navigation, and two-button grading ("Again" / "Got it"). Full keyboard support: space to reveal, arrow keys to move, 1/2 or Enter to grade. Facts stored in both directions (term ↔ definition) collapse to one review per session, with a Keyword / Description / Mixed switch choosing which side shows first; grading updates both stored cards.
+- **Quiz mode**: multiple-choice rounds (10/20/all questions) with distractors ranked by word-overlap similarity, so wrong answers come from the same topic instead of being obvious eliminations. Missed cards go straight back into the review queue.
 - **Decks**: cards belong to named decks, with a global deck filter across every view.
 - **Add and browse**: a quick-add form (Cmd/Ctrl+Enter to submit) and a browse table showing due time, streak, and lapse count per card, with two-click delete.
 - **Copy stats**: one button copies a compact plain-text summary (deck sizes, cards due today, 7-day accuracy, most-lapsed cards) to the clipboard, formatted for pasting into an AI tutor chat.
