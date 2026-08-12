@@ -337,16 +337,32 @@ function freshQuiz() {
   return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null, size: DEFAULT_QUIZ_SIZE };
 }
 
+// Normalize each card to { term, definition } — shorter side is the term, longer side
+// the definition — then dedupe by term so reversed pairs collapse to one question.
+// This makes every quiz "here is the word, pick its definition" with all-definition choices.
+function quizPool() {
+  const seen = new Set();
+  const items = [];
+  for (const c of state.cards.filter(inFilter)) {
+    const [term, definition] = c.front.length <= c.back.length ? [c.front, c.back] : [c.back, c.front];
+    const key = term.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ cardId: c.id, term, definition });
+  }
+  return items;
+}
+
 function startQuiz() {
   const q = state.quiz;
-  const pool = state.cards.filter(inFilter);
+  const pool = quizPool();
   if (pool.length < 4) return;
   const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
-  q.questions = shuffle(pool).slice(0, count).map((card) => {
+  q.questions = shuffle(pool).slice(0, count).map((item) => {
     const distractors = shuffle(
-      [...new Set(pool.filter((c) => c.id !== card.id).map((c) => c.back))].filter((b) => b !== card.back)
+      [...new Set(pool.filter((p) => p.cardId !== item.cardId).map((p) => p.definition))].filter((d) => d !== item.definition)
     ).slice(0, 3);
-    return { cardId: card.id, front: card.front, correct: card.back, choices: shuffle([card.back, ...distractors]) };
+    return { cardId: item.cardId, front: item.term, correct: item.definition, choices: shuffle([item.definition, ...distractors]) };
   });
   q.phase = 'question';
   q.idx = 0;
@@ -405,12 +421,12 @@ function renderQuiz() {
   const q = state.quiz;
   const area = $('#quiz-area');
   if (q.phase === 'start') {
-    const pool = state.cards.filter(inFilter);
+    const pool = quizPool();
     if (pool.length < 4) {
       area.innerHTML = `
         <div class="panel quiz-start">
           <div class="micro-label">Quiz</div>
-          <p>Need at least 4 cards in ${esc(deckLabel())} to build a quiz.</p>
+          <p>Need at least 4 distinct words in ${esc(deckLabel())} to build a quiz.</p>
         </div>`;
       return;
     }
