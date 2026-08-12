@@ -36,6 +36,11 @@
     <section id="view-review" hidden>
       <div class="review-top">
         <div class="micro-label" id="due-count"></div>
+        <div class="dir-switch" id="dir-switch" hidden>
+          <button class="dir-opt" data-dir="keyword">Keyword</button>
+          <button class="dir-opt" data-dir="description">Description</button>
+          <button class="dir-opt" data-dir="mixed">Mixed</button>
+        </div>
       </div>
       <div id="review-area"></div>
     </section>
@@ -104,6 +109,7 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+  <script src="logic.js" defer></script>
   <script src="store.js" defer></script>
   <script src="app.js" defer></script>
 </body>

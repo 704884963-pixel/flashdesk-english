@@ -8,6 +8,7 @@ const ASSETS = [
   'index.html',
   'styles.css',
   'app.js',
+  'logic.js',
   'store.js',
   'seed-data.js',
   'manifest.webmanifest',

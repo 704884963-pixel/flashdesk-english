@@ -23,11 +23,21 @@ function freshSession() {
     correct: 0,
     again: 0,
     gradedIds: new Set(),
+    picks: {}, // mixed-direction memo: 'idA|idB' -> shown card id, stable per session
     complete: false,
     logged: null, // null = pending, true/false = /api/session outcome
   };
 }
 state.session = freshSession();
+
+const DIRECTIONS = ['keyword', 'description', 'mixed'];
+state.direction = (() => {
+  try {
+    const d = localStorage.getItem('flashdesk-direction');
+    return DIRECTIONS.includes(d) ? d : 'mixed';
+  } catch { return 'mixed'; }
+})();
+state.twinMap = new Map();
 
 /* ---------- helpers ---------- */
 
@@ -87,11 +97,18 @@ function renderDeckControls() {
 
 function buildQueue() {
   const s = state.session;
-  s.queue = state.cards
-    .filter((c) => inFilter(c) && dueNow(c))
-    .sort((a, b) => a.due - b.due)
-    .map((c) => c.id);
+  const pool = state.cards.filter(inFilter);
+  state.twinMap = FlashLogic.buildTwinMap(pool);
+  s.queue = FlashLogic.reviewQueue(pool, Date.now(), state.direction, s.picks);
   if (s.pos >= s.queue.length) s.pos = 0;
+  renderDirSwitch();
+}
+
+function renderDirSwitch() {
+  const el = $('#dir-switch');
+  el.hidden = state.twinMap.size === 0; // nothing to switch without pairs
+  el.querySelectorAll('.dir-opt').forEach((b) =>
+    b.classList.toggle('active', b.dataset.dir === state.direction));
 }
 
 function stepCard(dir) {
@@ -219,6 +236,20 @@ async function grade(kind) {
   s.gradedIds.add(id);
   const idx = state.cards.findIndex((c) => c.id === id);
   if (idx !== -1) state.cards[idx] = card;
+
+  // The queue collapsed this card's reversed twin into this review — grade it
+  // identically so the same fact never comes due twice.
+  const twinId = state.twinMap.get(id);
+  if (twinId && state.cards.some((c) => c.id === twinId)) {
+    try {
+      const { card: twinCard } = await FlashStore.gradeCard(twinId, kind);
+      const tIdx = state.cards.findIndex((c) => c.id === twinId);
+      if (tIdx !== -1) state.cards[tIdx] = twinCard;
+    } catch (err) {
+      // Not fatal: the twin keeps its old schedule and surfaces next session.
+      toast(`Twin card save failed: ${err.message}`);
+    }
+  }
 
   s.revealed = false;
   buildQueue();
@@ -359,9 +390,20 @@ function startQuiz() {
   if (pool.length < 4) return;
   const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
   q.questions = shuffle(pool).slice(0, count).map((item) => {
-    const distractors = shuffle(
-      [...new Set(pool.filter((p) => p.cardId !== item.cardId).map((p) => p.definition))].filter((d) => d !== item.definition)
-    ).slice(0, 3);
+    // Hardest plausible options: top-6 most similar definitions, pick 3 at
+    // random (keeps repeat quizzes varied). Random fill only if the deck has
+    // fewer than 3 related items.
+    const distractors = shuffle(FlashLogic.rankDistractors(pool, item, 6))
+      .slice(0, 3)
+      .map((p) => p.definition);
+    if (distractors.length < 3) {
+      for (const p of shuffle(pool)) {
+        if (distractors.length >= 3) break;
+        if (p.cardId === item.cardId) continue;
+        if (p.definition === item.definition || distractors.includes(p.definition)) continue;
+        distractors.push(p.definition);
+      }
+    }
     return { cardId: item.cardId, front: item.term, correct: item.definition, choices: shuffle([item.definition, ...distractors]) };
   });
   q.phase = 'question';
@@ -545,6 +587,16 @@ function bindEvents() {
   $('#deck-filter').addEventListener('change', (e) => {
     state.deckFilter = e.target.value;
     switchView(state.view); // resets any in-progress session against the new filter
+  });
+
+  $('#dir-switch').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dir]');
+    if (!b || b.dataset.dir === state.direction) return;
+    state.direction = b.dataset.dir;
+    try { localStorage.setItem('flashdesk-direction', state.direction); } catch { /* private mode */ }
+    state.session = freshSession(); // orientation changes the queue — start clean
+    buildQueue();
+    renderReview();
   });
 
   $('#review-area').addEventListener('click', (e) => {
