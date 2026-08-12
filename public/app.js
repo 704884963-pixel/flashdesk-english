@@ -237,6 +237,20 @@ async function grade(kind) {
   const idx = state.cards.findIndex((c) => c.id === id);
   if (idx !== -1) state.cards[idx] = card;
 
+  // The queue collapsed this card's reversed twin into this review — grade it
+  // identically so the same fact never comes due twice.
+  const twinId = state.twinMap.get(id);
+  if (twinId && state.cards.some((c) => c.id === twinId)) {
+    try {
+      const { card: twinCard } = await FlashStore.gradeCard(twinId, kind);
+      const tIdx = state.cards.findIndex((c) => c.id === twinId);
+      if (tIdx !== -1) state.cards[tIdx] = twinCard;
+    } catch (err) {
+      // Not fatal: the twin keeps its old schedule and surfaces next session.
+      toast(`Twin card save failed: ${err.message}`);
+    }
+  }
+
   s.revealed = false;
   buildQueue();
   if (!s.queue.length) return completeSession();
