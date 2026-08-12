@@ -2,7 +2,7 @@
 // Every asset is precached and the cache name is a content hash stamped by
 // build.js, so "cache-first" can never serve a stale mix of assets.
 
-const CACHE = 'flashdesk-0c4b49d47d';
+const CACHE = 'flashdesk-7a3d2db40f';
 const ASSETS = [
   './',
   'index.html',

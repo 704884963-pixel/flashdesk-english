@@ -256,7 +256,7 @@ select:focus, input:focus, textarea:focus {
 
 .quiz-question .card-front { font-size: 1.3rem; }
 
-.quiz-choices { display: grid; gap: 10px; }
+.quiz-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 .quiz-choice {
   text-align: left;
@@ -274,6 +274,11 @@ select:focus, input:focus, textarea:focus {
 .quiz-choice:disabled { cursor: default; opacity: .75; }
 .quiz-choice.correct { border-color: var(--good); background: var(--good-dim); color: var(--text); opacity: 1; }
 .quiz-choice.wrong { border-color: var(--bad); background: var(--bad-dim); color: var(--text); opacity: 1; }
+
+/* One column on phones — long definitions stay readable; 2×2 grid returns on wider screens */
+@media (max-width: 560px) {
+  .quiz-choices { grid-template-columns: 1fr; }
+}
 
 .quiz-next-row { display: flex; justify-content: flex-end; margin-top: 14px; }
 
