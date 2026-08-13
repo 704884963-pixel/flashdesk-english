@@ -354,6 +354,15 @@ async function copyStats(btn, fallbackPre) {
 
 const QUIZ_LENGTHS = [10, 20, 'All'];
 const DEFAULT_QUIZ_SIZE = 20;
+const QUIZ_DIRECTIONS = ['keyword', 'definition', 'mixed'];
+const QUIZ_DIR_LABELS = { keyword: 'Keyword', definition: 'Definition', mixed: 'Mixed' };
+
+function quizDirection() {
+  try {
+    const d = localStorage.getItem('flashdesk-quiz-direction');
+    return QUIZ_DIRECTIONS.includes(d) ? d : 'mixed';
+  } catch { return 'mixed'; }
+}
 
 function shuffle(arr) {
   const a = arr.slice();
@@ -365,7 +374,7 @@ function shuffle(arr) {
 }
 
 function freshQuiz() {
-  return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null, size: DEFAULT_QUIZ_SIZE };
+  return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null, size: DEFAULT_QUIZ_SIZE, direction: quizDirection() };
 }
 
 // Normalize each card to { term, definition } — shorter side is the term, longer side
@@ -390,21 +399,16 @@ function startQuiz() {
   if (pool.length < 4) return;
   const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
   q.questions = shuffle(pool).slice(0, count).map((item) => {
-    // Hardest plausible options: top-6 most similar definitions, pick 3 at
-    // random (keeps repeat quizzes varied). Random fill only if the deck has
-    // fewer than 3 related items.
-    const distractors = shuffle(FlashLogic.rankDistractors(pool, item, 6))
-      .slice(0, 3)
-      .map((p) => p.definition);
-    if (distractors.length < 3) {
-      for (const p of shuffle(pool)) {
-        if (distractors.length >= 3) break;
-        if (p.cardId === item.cardId) continue;
-        if (p.definition === item.definition || distractors.includes(p.definition)) continue;
-        distractors.push(p.definition);
-      }
-    }
-    return { cardId: item.cardId, front: item.term, correct: item.definition, choices: shuffle([item.definition, ...distractors]) };
+    // keyword: word front, definition choices. definition: definition front,
+    // term choices (exam-shaped). mixed: coin flip per question.
+    const orientation = q.direction === 'mixed'
+      ? (Math.random() < 0.5 ? 'keyword' : 'definition')
+      : q.direction;
+    const side = orientation === 'keyword' ? 'definition' : 'term';
+    const front = orientation === 'keyword' ? item.term : item.definition;
+    const correct = orientation === 'keyword' ? item.definition : item.term;
+    const distractors = FlashLogic.buildChoices(pool, item, side);
+    return { cardId: item.cardId, front, correct, choices: shuffle([correct, ...distractors]) };
   });
   q.phase = 'question';
   q.idx = 0;
@@ -475,7 +479,16 @@ function renderQuiz() {
     area.innerHTML = `
       <div class="panel quiz-start">
         <div class="micro-label">Quiz · ${esc(deckLabel())}</div>
-        <p>Pick the definition that matches the word. Questions are drawn at random; missed cards go straight back into your Review queue.</p>
+        <p>Questions are drawn at random; missed cards go straight back into your Review queue.</p>
+        <div class="quiz-length">
+          <span class="micro-label">Direction</span>
+          <div class="quiz-length-opts">
+            ${QUIZ_DIRECTIONS.map((d) => {
+              const active = q.direction === d ? ' active' : '';
+              return `<button class="quiz-len${active}" data-quizdir="${d}">${QUIZ_DIR_LABELS[d]}</button>`;
+            }).join('')}
+          </div>
+        </div>
         <div class="quiz-length">
           <span class="micro-label">Length</span>
           <div class="quiz-length-opts">
@@ -654,7 +667,11 @@ function bindEvents() {
   $('#quiz-area').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.size !== undefined) {
+    if (b.dataset.quizdir !== undefined) {
+      state.quiz.direction = b.dataset.quizdir;
+      try { localStorage.setItem('flashdesk-quiz-direction', state.quiz.direction); } catch { /* private mode */ }
+      renderQuiz();
+    } else if (b.dataset.size !== undefined) {
       state.quiz.size = b.dataset.size === 'All' ? 'All' : Number(b.dataset.size);
       renderQuiz();
     } else if (b.id === 'quiz-start-btn') startQuiz();
