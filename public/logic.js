@@ -91,8 +91,14 @@
   function rankDistractors(pool, item, n) {
     const seenDefs = new Set([item.definition]);
     const itemTerm = norm(item.term);
-    const namesTerm = (p) => itemTerm.length > 3
-      && (norm(p.term).includes(itemTerm) || norm(p.definition).includes(itemTerm));
+    // Either term containing the other means both cards describe the same
+    // fact — offering one against the other puts two correct answers on
+    // screen. Definitions naming the asked term are the same hazard.
+    const namesTerm = (p) => {
+      const pTerm = norm(p.term);
+      if (itemTerm.length > 3 && (pTerm.includes(itemTerm) || norm(p.definition).includes(itemTerm))) return true;
+      return pTerm.length > 3 && itemTerm.includes(pTerm);
+    };
     return pool
       .filter((p) => {
         if (p.cardId === item.cardId || seenDefs.has(p.definition)) return false;

@@ -106,3 +106,25 @@ test('rankDistractors drops candidates that name the asked term', () => {
   const ranked = rankDistractors([seg, segScenario, segMention, det], seg, 6);
   assert.deepEqual(ranked.map((p) => p.cardId), ['s4']);
 });
+
+test('rankDistractors drops term-variant twins in both directions', () => {
+  const scenario = {
+    cardId: 'b1',
+    term: 'Batch transcription and async, high volume, Blob input',
+    definition: 'Ten thousand recorded calls need transcripts overnight',
+  };
+  const vocab = {
+    cardId: 'b2',
+    term: 'Batch transcription',
+    definition: 'Pre-recorded files in Blob Storage, high volume, async.',
+  };
+  const other = {
+    cardId: 'b3',
+    term: 'Real-time speech to text',
+    definition: 'Live streaming audio for interactive transcription apps',
+  };
+  // Asking about the long-term scenario item must not offer the short vocab
+  // term (it would also be correct) — and vice versa.
+  assert.ok(!rankDistractors([scenario, vocab, other], scenario, 6).some((p) => p.cardId === 'b2'));
+  assert.ok(!rankDistractors([scenario, vocab, other], vocab, 6).some((p) => p.cardId === 'b1'));
+});
