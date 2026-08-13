@@ -113,7 +113,55 @@
       .map((x) => x.p);
   }
 
-  const FlashLogic = { buildTwinMap, reviewQueue, similarity, rankDistractors };
+  function shuffleArr(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // "Around the same length": both short (a keyword next to a keyword), or
+  // within roughly 2x of each other. Anything else is a length tell.
+  const SHORT = 45;
+  function lengthCompatible(a, b) {
+    if (a.length <= SHORT && b.length <= SHORT) return true;
+    return Math.min(a.length, b.length) / Math.max(a.length, b.length, 1) >= 0.45;
+  }
+
+  // n distractor texts for a quiz question about `item`. side picks which
+  // text the choices show: 'definition' (keyword-mode) or 'term'
+  // (definition-mode). Priority: similar topic + similar length, then
+  // similar length anywhere in the pool, then similar topic any length,
+  // then anything — a length tell defeats the question outright, an
+  // off-topic option only weakens it; a full row beats a uniform one.
+  function buildChoices(pool, item, side, n) {
+    const count = n || 3;
+    const correct = side === 'term' ? item.term : item.definition;
+    const textOf = (p) => (side === 'term' ? p.term : p.definition);
+    const used = new Set([correct]);
+    const chosen = [];
+    const take = (candidates, requireLength) => {
+      for (const p of candidates) {
+        if (chosen.length >= count) return;
+        const t = textOf(p);
+        if (used.has(t)) continue;
+        if (requireLength && !lengthCompatible(t, correct)) continue;
+        used.add(t);
+        chosen.push(t);
+      }
+    };
+    const ranked = shuffleArr(rankDistractors(pool, item, 8));
+    const rest = shuffleArr(pool.filter((p) => p.cardId !== item.cardId));
+    take(ranked, true);
+    take(rest, true);
+    take(ranked, false);
+    take(rest, false);
+    return chosen;
+  }
+
+  const FlashLogic = { buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices };
   if (typeof window !== 'undefined') window.FlashLogic = FlashLogic;
   if (typeof module !== 'undefined' && module.exports) module.exports = FlashLogic;
 })();

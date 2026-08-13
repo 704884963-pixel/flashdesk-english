@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildTwinMap, reviewQueue, similarity, rankDistractors } = require('../public/logic.js');
+const { buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices } = require('../public/logic.js');
 
 const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, deck });
 
@@ -127,4 +127,43 @@ test('rankDistractors drops term-variant twins in both directions', () => {
   // term (it would also be correct) — and vice versa.
   assert.ok(!rankDistractors([scenario, vocab, other], scenario, 6).some((p) => p.cardId === 'b2'));
   assert.ok(!rankDistractors([scenario, vocab, other], vocab, 6).some((p) => p.cardId === 'b1'));
+});
+
+const lenPool = [
+  { cardId: 'v1', term: 'Regression', definition: 'Predicts a continuous number.' },
+  { cardId: 'v2', term: 'Classification', definition: 'Predicts a category.' },
+  { cardId: 'v3', term: 'Clustering', definition: 'Groups similar items with no labels.' },
+  { cardId: 'v4', term: 'Supervised learning', definition: 'Labeled data. Learns the mapping from input to output.' },
+  { cardId: 'v5', term: 'Long scenario', definition: 'A supermarket chain wants to estimate how many rotisserie chickens each store will sell next week, predicts numbers from three years of past sales data and predicts demand.' },
+];
+
+test('buildChoices keeps choices length-compatible with the correct answer', () => {
+  for (let i = 0; i < 10; i += 1) {
+    const choices = buildChoices(lenPool, lenPool[0], 'definition');
+    assert.equal(choices.length, 3);
+    assert.ok(!choices.includes(lenPool[0].definition));
+    // v5's 170-char definition is a length tell against the 29-char correct
+    // answer, and three compatible candidates exist - it must never appear.
+    assert.ok(!choices.includes(lenPool[4].definition));
+  }
+});
+
+test('buildChoices term side returns terms, never the correct one', () => {
+  const choices = buildChoices(lenPool, lenPool[0], 'term');
+  assert.equal(choices.length, 3);
+  assert.ok(!choices.includes('Regression'));
+  const allTerms = lenPool.map((p) => p.term);
+  for (const c of choices) assert.ok(allTerms.includes(c));
+});
+
+test('buildChoices fills to n even when few similar candidates exist', () => {
+  const item = { cardId: 'x1', term: 'Phoneme', definition: 'The smallest unit of sound in speech.' };
+  const pool = [item,
+    { cardId: 'x2', term: 'Prosody', definition: 'Natural rhythm and cadence in speech.' },
+    { cardId: 'x3', term: 'Azure Backup', definition: 'Disaster recovery and data protection.' },
+    { cardId: 'x4', term: 'RBAC', definition: 'Controls who can access resources.' },
+  ];
+  const choices = buildChoices(pool, item, 'definition');
+  assert.equal(choices.length, 3);
+  assert.equal(new Set(choices).size, 3);
 });
