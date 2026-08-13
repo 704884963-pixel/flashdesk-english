@@ -50,9 +50,10 @@ Distractor selection moves into a new pure helper so it is unit-testable:
    class (≤ 45 chars — single words / short phrases) or their lengths are
    within roughly 2× of each other (`min/max ≥ 0.45`). Prefer
    length-compatible candidates: random-pick `n` among them first.
-4. If short, fill from the remaining ranked candidates, then from the rest of
-   the pool — length-compatible first at each stage, anything as last resort
-   (a full choice row beats a perfectly uniform one).
+4. If short, fill in strict priority order: length-compatible from the rest
+   of the pool, then ranked candidates of any length, then anything — a
+   length tell defeats the question outright, an off-topic option only
+   weakens it; and a full choice row beats a perfectly uniform one.
 
 The question object keeps its shape (`{cardId, front, correct, choices}`) so
 render/answer/results code is untouched; the missed-answers panel shows
