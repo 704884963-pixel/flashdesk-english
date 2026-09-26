@@ -14,12 +14,12 @@
     api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
   window.FlashStore = {
-    load: () => api('/api/cards'), // -> {cards, history}
+    load: () => api('/api/cards'), // -> {cards, history, meta?}; legacy Word defaults are read-only
     addCard: (fields) => postJSON('/api/cards', fields), // -> {card}
-    updateCard: (id, { front, back }) => api(`/api/cards/${encodeURIComponent(id)}`, {
+    updateCard: (id, { front, back, memoryReading, chineseReading, forms }) => api(`/api/cards/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ front, back }),
+      body: JSON.stringify({ front, back, memoryReading, chineseReading, forms }),
     }), // -> {card}
     gradeCard: (id, grade) => postJSON('/api/cards/grade', { id, grade }), // -> {card}
     deleteCard: (id) => api(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' }), // -> {ok}

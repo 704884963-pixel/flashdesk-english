@@ -47,6 +47,32 @@ function esc(s) {
   }[ch]));
 }
 
+function wordDetails(card) {
+  return {
+    wordNumber: Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0 ? card.wordNumber : null,
+    memoryReading: typeof card.memoryReading === 'string' ? card.memoryReading : '',
+    chineseReading: typeof card.chineseReading === 'string' ? card.chineseReading : '',
+    forms: Array.isArray(card.forms) ? card.forms.filter((form) => typeof form === 'string') : [],
+  };
+}
+
+function parseForms(text) {
+  return [...new Set(text.split(/[,，\r\n]+/).map((form) => form.trim()).filter(Boolean))];
+}
+
+function wordBackHtml(card) {
+  const details = wordDetails(card);
+  const section = (label, value) => value
+    ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
+  return `<div class="word-back">
+    ${details.wordNumber === null ? '' : `<div class="micro-label">#${details.wordNumber}</div>`}
+    ${section('🧠 好记读法', details.memoryReading)}
+    ${section('🗣 简单中文读法', details.chineseReading)}
+    ${section('🇨🇳 中文意思', card.back)}
+    ${section('词形变化', details.forms.join(' / '))}
+  </div>`;
+}
+
 function speakEnglish(text) {
   if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
   const value = String(text || '').trim();
@@ -203,8 +229,7 @@ function renderReview() {
               <div class="micro-label">点击查看答案 · 空格键</div>
             </div>
             <div class="card-face face-back" aria-hidden="${!s.revealed}">
-              <div class="card-front">${esc(card.front)}</div>
-              <div class="card-back">${esc(card.back)}</div>
+              ${card.deck === 'Words' ? wordBackHtml(card) : `<div class="card-front">${esc(card.front)}</div><div class="card-back">${esc(card.back)}</div>`}
               <div class="micro-label">点击返回正面 · 空格键</div>
             </div>
           </div>
@@ -610,7 +635,7 @@ function renderBrowse() {
     const label = `${deckDisplayName(deck)} · ${group.length} 张`;
     const rows = group.map((c) => `
       <tr>
-        <td class="cell-text" title="${esc(c.front)}">${esc(c.front)}</td>
+        <td class="cell-text" title="${esc(c.front)}">${c.deck === 'Words' ? `<div class="micro-label">#${wordDetails(c).wordNumber ?? '未编号'}</div>` : ''}${esc(c.front)}</td>
         <td class="cell-text" title="${esc(c.back)}">${esc(c.back)}</td>
         <td class="num">${esc(deckDisplayName(c.deck))}</td>
         <td class="num">${fmtRelative(c.due)}</td>
@@ -628,9 +653,10 @@ function updateAddForm() {
   const isSentence = $('#add-type').value === 'Sentences';
   $('#add-front-label').textContent = isSentence ? '英文长句' : '英文单词';
   $('#add-front').placeholder = isSentence ? '例如：Could you help me with this?' : '例如：apple';
-  $('#add-back-label').textContent = isSentence ? '中文理解 / 学习备注' : '中文意思 / 学习备注';
+  $('#add-back-label').textContent = isSentence ? '中文理解 / 学习备注' : '中文意思';
   $('#add-back').placeholder = isSentence ? '填写句子的中文理解或学习备注' : '例如：苹果；可填写用法备注';
   $('#add-submit').textContent = isSentence ? '添加长句' : '添加单词';
+  document.querySelectorAll('[data-word-field]').forEach((field) => { field.hidden = isSentence; });
 }
 
 /* ---------- views ---------- */
@@ -760,12 +786,26 @@ function bindEvents() {
     const back = $('#add-back').value.trim();
     const deck = $('#add-type').value;
     if (!front || !back || !deck) return;
+    const submit = $('#add-submit');
+    if (submit.disabled) return;
+    const fields = { front, back, deck };
+    if (deck === 'Words') {
+      fields.memoryReading = $('#add-memory-reading').value.trim();
+      fields.chineseReading = $('#add-chinese-reading').value.trim();
+      fields.forms = parseForms($('#add-forms').value);
+    }
+    submit.disabled = true;
     try {
-      const { card } = await FlashStore.addCard({ front, back, deck });
+      const { card } = await FlashStore.addCard(fields);
       state.cards.push(card);
       renderDeckControls();
       $('#add-front').value = '';
       $('#add-back').value = '';
+      if (deck === 'Words') {
+        $('#add-memory-reading').value = '';
+        $('#add-chinese-reading').value = '';
+        $('#add-forms').value = '';
+      }
       const flash = $('#add-flash');
       flash.hidden = false;
       clearTimeout(flash._t);
@@ -773,6 +813,8 @@ function bindEvents() {
       $('#add-front').focus();
     } catch (err) {
       toast(`添加失败： ${err.message}`);
+    } finally {
+      submit.disabled = false;
     }
   });
 
@@ -789,6 +831,15 @@ function bindEvents() {
       form.dataset.cardId = card.id;
       $('#edit-front').value = card.front;
       $('#edit-back').value = card.back;
+      const isWord = card.deck === 'Words';
+      const details = wordDetails(card);
+      form.querySelectorAll('[data-edit-word]').forEach((field) => { field.hidden = !isWord; });
+      $('#edit-number').textContent = details.wordNumber === null ? '未编号' : `#${details.wordNumber}`;
+      $('#edit-front-label').textContent = isWord ? '英文单词' : '英文';
+      $('#edit-back-label').textContent = isWord ? '中文意思' : '中文 / 学习备注';
+      $('#edit-memory-reading').value = details.memoryReading;
+      $('#edit-chinese-reading').value = details.chineseReading;
+      $('#edit-forms').value = details.forms.join('\n');
       $('#edit-dialog').showModal();
       $('#edit-front').focus();
       return;
@@ -828,10 +879,16 @@ function bindEvents() {
     const back = $('#edit-back').value.trim();
     const save = $('#edit-save');
     if (save.disabled || !id || !front || !back) return;
+    const fields = { front, back };
+    if (state.cards.find((card) => card.id === id)?.deck === 'Words') {
+      fields.memoryReading = $('#edit-memory-reading').value.trim();
+      fields.chineseReading = $('#edit-chinese-reading').value.trim();
+      fields.forms = parseForms($('#edit-forms').value);
+    }
     save.disabled = true;
     $('#edit-cancel').disabled = true;
     try {
-      const { card } = await FlashStore.updateCard(id, { front, back });
+      const { card } = await FlashStore.updateCard(id, fields);
       const index = state.cards.findIndex((c) => c.id === card.id);
       if (index !== -1) state.cards[index] = card;
       renderBrowse();

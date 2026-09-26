@@ -28,6 +28,74 @@ function toCard({ front, back, deck }) {
   return { id: makeId(), front, back, deck, due: now, streak: 0, lapses: 0, created: now };
 }
 
+function wordDefaults(card) {
+  if (card.deck !== 'Words') return card;
+  return {
+    ...card,
+    wordNumber: card.wordNumber ?? null,
+    memoryReading: card.memoryReading ?? '',
+    chineseReading: card.chineseReading ?? '',
+    forms: card.forms ?? [],
+  };
+}
+
+function wordFields(fields) {
+  const memoryReading = fields.memoryReading === undefined ? '' : fields.memoryReading;
+  const chineseReading = fields.chineseReading === undefined ? '' : fields.chineseReading;
+  if (typeof memoryReading !== 'string' || typeof chineseReading !== 'string') {
+    throw new Error('好记读法和简单中文读法必须是字符串');
+  }
+  const forms = fields.forms === undefined ? [] : fields.forms;
+  if (!Array.isArray(forms) || forms.some((form) => typeof form !== 'string')) {
+    throw new Error('词形变化必须是字符串数组');
+  }
+  return {
+    memoryReading: memoryReading.trim(),
+    chineseReading: chineseReading.trim(),
+    forms: [...new Set(forms.map((form) => form.trim()).filter(Boolean))],
+  };
+}
+
+function nextWordNumber() {
+  let max = 0;
+  for (const card of data.cards) {
+    if (Number.isSafeInteger(card.wordNumber) && card.wordNumber > max) max = card.wordNumber;
+  }
+  const saved = data.meta?.nextWordNumber;
+  const next = Math.max(max + 1, Number.isSafeInteger(saved) && saved > 0 ? saved : 1);
+  if (!Number.isSafeInteger(next) || !Number.isSafeInteger(next + 1)) {
+    throw new Error('单词编号已超出安全范围');
+  }
+  return next;
+}
+
+function prepareWord(fields) {
+  if (typeof fields.front !== 'string' || !fields.front.trim()
+      || typeof fields.back !== 'string' || !fields.back.trim()) {
+    throw new Error('英文单词和中文意思必须是非空字符串');
+  }
+  const front = fields.front.trim();
+  if (data.cards.some((card) => card.deck === 'Words'
+      && card.front.trim().toLowerCase() === front.toLowerCase())) {
+    throw new Error('该单词已存在，请勿重复添加');
+  }
+  return { ...wordFields(fields), wordNumber: nextWordNumber() };
+}
+
+function editableWordFields(card, fields) {
+  if (card.deck !== 'Words') return {};
+  if (data.cards.some((other) => other.id !== card.id && other.deck === 'Words'
+      && other.front.trim().toLowerCase() === fields.front.trim().toLowerCase())) {
+    throw new Error('该单词已存在，请勿重复添加');
+  }
+  const normalized = wordFields(fields);
+  const changes = {};
+  for (const key of ['memoryReading', 'chineseReading', 'forms']) {
+    if (fields[key] !== undefined) changes[key] = normalized[key];
+  }
+  return changes;
+}
+
 function saveData() {
   fs.writeFileSync(DATA_FILE + '.tmp', JSON.stringify(data, null, 2));
   fs.renameSync(DATA_FILE + '.tmp', DATA_FILE);
@@ -107,18 +175,40 @@ function readBody(req) {
 
 async function handleApi(req, res, pathname) {
   if (req.method === 'GET' && pathname === '/api/cards') {
-    return sendJSON(res, 200, { cards: data.cards, history: data.history });
+    return sendJSON(res, 200, {
+      cards: data.cards.map(wordDefaults), history: data.history,
+      ...(data.meta ? { meta: data.meta } : {}),
+    });
   }
 
   if (req.method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
+    let extra = {};
+    if (String(body?.deck || '').trim() === 'Words') {
+      try { extra = prepareWord(body); }
+      catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    }
     const front = String(body.front || '').trim();
     const back = String(body.back || '').trim();
     const deck = String(body.deck || '').trim();
     if (!front || !back || !deck) return sendJSON(res, 400, { error: 'front, back, and deck are all required' });
     const card = toCard({ front, back, deck });
+    if (deck === 'Words') {
+      card.wordNumber = extra.wordNumber;
+      card.memoryReading = extra.memoryReading;
+      card.chineseReading = extra.chineseReading;
+      card.forms = extra.forms;
+    }
+    const previousMeta = data.meta;
+    if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
     data.cards.push(card);
-    saveData();
+    try { saveData(); }
+    catch (err) {
+      data.cards.pop();
+      if (previousMeta === undefined) delete data.meta;
+      else data.meta = previousMeta;
+      throw err;
+    }
     return sendJSON(res, 201, { card });
   }
 
@@ -149,9 +239,19 @@ async function handleApi(req, res, pathname) {
         || typeof body.back !== 'string' || !body.back.trim()) {
       return sendJSON(res, 400, { error: 'front and back must be non-empty strings' });
     }
+    let changes;
+    try { changes = editableWordFields(card, body); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    const previous = { ...card };
     card.front = body.front.trim();
     card.back = body.back.trim();
-    saveData();
+    for (const key of Object.keys(changes)) card[key] = changes[key];
+    try { saveData(); }
+    catch (err) {
+      for (const key of Object.keys(changes)) delete card[key];
+      Object.assign(card, previous);
+      throw err;
+    }
     return sendJSON(res, 200, { card });
   }
 
@@ -159,6 +259,10 @@ async function handleApi(req, res, pathname) {
   if (req.method === 'DELETE' && del) {
     const idx = data.cards.findIndex((c) => c.id === del[1]);
     if (idx === -1) return sendJSON(res, 404, { error: 'card not found' });
+    // Capture legacy numbering before removing a numbered card.
+    if (Number.isSafeInteger(data.cards[idx].wordNumber) && data.cards[idx].wordNumber > 0) {
+      data.meta = { ...data.meta, nextWordNumber: nextWordNumber() };
+    }
     data.cards.splice(idx, 1);
     saveData();
     return sendJSON(res, 200, { ok: true });

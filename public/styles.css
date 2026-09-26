@@ -521,6 +521,9 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 
 .face-back { transform: rotateY(180deg); }
 
+.word-back { display: grid; gap: 18px; width: 100%; text-align: left; }
+.word-detail { display: grid; gap: 6px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+
 @media (prefers-reduced-motion: reduce) {
   .card-flip-inner { transition: none; }
 }

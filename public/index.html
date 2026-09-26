@@ -55,9 +55,21 @@
           <span class="micro-label" id="add-front-label">英文单词</span>
           <textarea id="add-front" rows="3" placeholder="例如：apple" required></textarea>
         </label>
+        <label class="field" data-word-field>
+          <span class="micro-label">好记读法</span>
+          <input id="add-memory-reading" placeholder="例如：ex（伊克斯）+ pect（佩克特）">
+        </label>
+        <label class="field" data-word-field>
+          <span class="micro-label">简单中文读法</span>
+          <input id="add-chinese-reading" placeholder="例如：伊克斯-佩克特">
+        </label>
         <label class="field">
-          <span class="micro-label" id="add-back-label">中文意思 / 学习备注</span>
+          <span class="micro-label" id="add-back-label">中文意思</span>
           <textarea id="add-back" rows="3" placeholder="例如：苹果；可填写用法备注" required></textarea>
+        </label>
+        <label class="field" data-word-field>
+          <span class="micro-label">词形变化（可选）</span>
+          <textarea id="add-forms" rows="2" placeholder="例如：expected, expecting（用逗号、中文逗号或换行分隔）"></textarea>
         </label>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" id="add-submit">添加单词</button>
@@ -105,13 +117,26 @@
 
   <dialog id="edit-dialog" aria-label="编辑卡片">
     <form id="edit-form" class="form-panel">
+      <div data-edit-word hidden><span class="micro-label">编号</span> <span id="edit-number"></span></div>
       <label class="field">
-        <span class="micro-label">英文</span>
+        <span class="micro-label" id="edit-front-label">英文</span>
         <textarea id="edit-front" rows="4" required></textarea>
       </label>
+      <label class="field" data-edit-word hidden>
+        <span class="micro-label">好记读法</span>
+        <input id="edit-memory-reading">
+      </label>
+      <label class="field" data-edit-word hidden>
+        <span class="micro-label">简单中文读法</span>
+        <input id="edit-chinese-reading">
+      </label>
       <label class="field">
-        <span class="micro-label">中文 / 学习备注</span>
+        <span class="micro-label" id="edit-back-label">中文 / 学习备注</span>
         <textarea id="edit-back" rows="4" required></textarea>
+      </label>
+      <label class="field" data-edit-word hidden>
+        <span class="micro-label">词形变化（可选）</span>
+        <textarea id="edit-forms" rows="2" placeholder="用逗号、中文逗号或换行分隔"></textarea>
       </label>
       <div class="form-actions">
         <button type="button" class="btn" id="edit-cancel">取消</button>

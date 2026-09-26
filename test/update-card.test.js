@@ -15,6 +15,10 @@ const original = {
   due: 1900000000000, streak: 4, lapses: 3, created: 1700000000000,
 };
 const fixture = () => ({ cards: [{ ...original }], history: [] });
+// Read boundaries supply optional Word defaults without migrating stored cards.
+const loadedFixture = (card = original) => ({ cards: [{
+  ...card, wordNumber: null, memoryReading: '', chineseReading: '', forms: [],
+}], history: [] });
 const invalidFields = [
   { front: '', back: 'valid' },
   { front: ' \n ', back: 'valid' },
@@ -27,7 +31,7 @@ const invalidFields = [
 ];
 const injectedFields = {
   front: '  updated approach  ', back: '  更新后的备注  ',
-  id: 'replacement', deck: 'Sentences', due: 0, streak: 0, lapses: 0, created: 0,
+  id: 'replacement', deck: 'Sentences', wordNumber: 999, due: 0, streak: 0, lapses: 0, created: 0,
 };
 const expected = { ...original, front: 'updated approach', back: '更新后的备注' };
 
@@ -106,7 +110,7 @@ test('Node PATCH trims content, persists it and ignores all protected fields', a
   assert.deepEqual(result.body, { card: expected });
   assert.deepEqual(h.read(), { cards: [expected], history: [] });
   const loaded = await (await fetch(`${h.base}/api/cards`)).json();
-  assert.deepEqual(loaded.cards, [expected]);
+  assert.deepEqual(loaded.cards, loadedFixture(expected).cards);
 });
 
 test('Node PATCH rejects empty/non-string content and missing IDs without changing data', async (t) => {
@@ -120,7 +124,7 @@ test('Node PATCH rejects empty/non-string content and missing IDs without changi
   assert.equal(missing.status, 404);
   assert.equal(missing.body.error, 'card not found');
   assert.deepEqual(h.read(), fixture());
-  assert.deepEqual(await (await fetch(`${h.base}/api/cards`)).json(), fixture());
+  assert.deepEqual(await (await fetch(`${h.base}/api/cards`)).json(), loadedFixture());
 });
 
 test('Node FlashStore updateCard uses PATCH, sends only content and returns the full card', async (t) => {
@@ -152,7 +156,7 @@ test('PWA updateCard trims content, preserves protected fields and returns a clo
   assert.deepEqual(h.read(), { cards: [expected], history: [] });
   result.card.front = 'mutated response';
   result.card.streak = 99;
-  assert.deepEqual(plain(await h.store.load()), { cards: [expected], history: [] });
+  assert.deepEqual(plain(await h.store.load()), loadedFixture(expected));
 });
 
 test('PWA updateCard rejects empty/non-string content and missing IDs without changing data', async () => {
@@ -162,7 +166,7 @@ test('PWA updateCard rejects empty/non-string content and missing IDs without ch
   }
   await assert.rejects(h.store.updateCard('missing', { front: 'new', back: 'new' }), /card not found/);
   assert.deepEqual(h.read(), fixture());
-  assert.deepEqual(plain(await h.store.load()), fixture());
+  assert.deepEqual(plain(await h.store.load()), loadedFixture());
 });
 
 test('PWA updateCard rolls back both content fields on persistence failure and can retry', async () => {
@@ -170,7 +174,7 @@ test('PWA updateCard rolls back both content fields on persistence failure and c
   h.failWrites(true);
   await assert.rejects(h.store.updateCard(original.id, injectedFields), /quota exceeded/);
   assert.deepEqual(h.read(), fixture());
-  assert.deepEqual(plain(await h.store.load()), fixture());
+  assert.deepEqual(plain(await h.store.load()), loadedFixture());
   h.failWrites(false);
   assert.deepEqual(plain(await h.store.updateCard(original.id, injectedFields)), { card: expected });
 });

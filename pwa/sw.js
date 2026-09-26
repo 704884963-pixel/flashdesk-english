@@ -10,7 +10,7 @@ const ASSETS = [
   'app.js',
   'logic.js',
   'store.js',
-  'seed-data.js',
+  'default-data.json',
   'manifest.webmanifest',
   'icon-180.png',
   'icon-192.png',
