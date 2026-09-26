@@ -103,6 +103,24 @@
     </section>
   </div>
 
+  <dialog id="edit-dialog" aria-label="编辑卡片">
+    <form id="edit-form" class="form-panel">
+      <label class="field">
+        <span class="micro-label">英文</span>
+        <textarea id="edit-front" rows="4" required></textarea>
+      </label>
+      <label class="field">
+        <span class="micro-label">中文 / 学习备注</span>
+        <textarea id="edit-back" rows="4" required></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn" id="edit-cancel">取消</button>
+        <button type="submit" class="btn btn-primary" id="edit-save">保存</button>
+      </div>
+      <div id="edit-toast-slot" aria-live="polite"></div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <script src="logic.js" defer></script>
   <script src="store.js" defer></script>

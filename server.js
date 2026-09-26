@@ -140,6 +140,21 @@ async function handleApi(req, res, pathname) {
     return sendJSON(res, 200, { card });
   }
 
+  const update = pathname.match(/^\/api\/cards\/([^/]+)$/);
+  if (req.method === 'PATCH' && update) {
+    const card = data.cards.find((c) => c.id === update[1]);
+    if (!card) return sendJSON(res, 404, { error: 'card not found' });
+    const body = await readBody(req);
+    if (!body || typeof body.front !== 'string' || !body.front.trim()
+        || typeof body.back !== 'string' || !body.back.trim()) {
+      return sendJSON(res, 400, { error: 'front and back must be non-empty strings' });
+    }
+    card.front = body.front.trim();
+    card.back = body.back.trim();
+    saveData();
+    return sendJSON(res, 200, { card });
+  }
+
   const del = pathname.match(/^\/api\/cards\/([^/]+)$/);
   if (req.method === 'DELETE' && del) {
     const idx = data.cards.findIndex((c) => c.id === del[1]);

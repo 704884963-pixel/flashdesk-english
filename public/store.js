@@ -16,6 +16,11 @@
   window.FlashStore = {
     load: () => api('/api/cards'), // -> {cards, history}
     addCard: (fields) => postJSON('/api/cards', fields), // -> {card}
+    updateCard: (id, { front, back }) => api(`/api/cards/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ front, back }),
+    }), // -> {card}
     gradeCard: (id, grade) => postJSON('/api/cards/grade', { id, grade }), // -> {card}
     deleteCard: (id) => api(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' }), // -> {ok}
     logSession: (summary) => postJSON('/api/session', summary), // -> {ok, logged}

@@ -616,7 +616,7 @@ function renderBrowse() {
         <td class="num">${fmtRelative(c.due)}</td>
         <td class="num">${c.streak}</td>
         <td class="num">${c.lapses}</td>
-        <td><button class="x-btn" data-del="${esc(c.id)}" title="删除卡片">✕</button></td>
+        <td><button type="button" class="btn" data-edit="${esc(c.id)}">编辑</button> <button class="x-btn" data-del="${esc(c.id)}" title="删除卡片">✕</button></td>
       </tr>`).join('');
     return `<tr class="browse-group-row"><th colspan="7" scope="rowgroup">${esc(label)}</th></tr>${rows}`;
   }).join('');
@@ -781,6 +781,18 @@ function bindEvents() {
   });
 
   $('#browse-table').addEventListener('click', async (e) => {
+    const edit = e.target.closest('[data-edit]');
+    if (edit) {
+      const card = state.cards.find((c) => c.id === edit.dataset.edit);
+      if (!card) return;
+      const form = $('#edit-form');
+      form.dataset.cardId = card.id;
+      $('#edit-front').value = card.front;
+      $('#edit-back').value = card.back;
+      $('#edit-dialog').showModal();
+      $('#edit-front').focus();
+      return;
+    }
     const btn = e.target.closest('[data-del]');
     if (!btn) return;
     if (!btn.dataset.armed) {
@@ -797,6 +809,42 @@ function bindEvents() {
       renderBrowse();
     } catch (err) {
       toast(`删除失败： ${err.message}`);
+    }
+  });
+
+  $('#edit-cancel').addEventListener('click', () => $('#edit-dialog').close());
+  $('#edit-dialog').addEventListener('cancel', (e) => {
+    if ($('#edit-save').disabled) e.preventDefault();
+  });
+  $('#edit-dialog').addEventListener('close', () => {
+    // Keep the existing toast visible after it leaves the modal top layer.
+    document.body.appendChild($('#toast'));
+  });
+  $('#edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const id = form.dataset.cardId;
+    const front = $('#edit-front').value.trim();
+    const back = $('#edit-back').value.trim();
+    const save = $('#edit-save');
+    if (save.disabled || !id || !front || !back) return;
+    save.disabled = true;
+    $('#edit-cancel').disabled = true;
+    try {
+      const { card } = await FlashStore.updateCard(id, { front, back });
+      const index = state.cards.findIndex((c) => c.id === card.id);
+      if (index !== -1) state.cards[index] = card;
+      renderBrowse();
+      // A body-level toast would be behind the modal; restore it before closing.
+      document.body.appendChild($('#toast'));
+      $('#edit-dialog').close();
+      toast('已保存');
+    } catch (err) {
+      $('#edit-toast-slot').appendChild($('#toast'));
+      toast(`保存失败：${err.message}`);
+    } finally {
+      save.disabled = false;
+      $('#edit-cancel').disabled = false;
     }
   });
 
