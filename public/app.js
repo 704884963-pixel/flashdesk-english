@@ -47,6 +47,36 @@ function esc(s) {
   }[ch]));
 }
 
+function speakEnglish(text) {
+  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
+  const value = String(text || '').trim();
+  if (!value) return;
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(value);
+  utterance.lang = 'en-US';
+  window.speechSynthesis.speak(utterance);
+}
+
+function deckDisplayName(deck) {
+  if (deck === 'Words') return '单词';
+  if (deck === 'Sentences') return '长句';
+  return deck;
+}
+
+function localizedLogNote(logged) {
+  const note = FlashStore.logNote(logged);
+  const labels = {
+    'Logging…': '正在记录…',
+    'Logged to ~/drills/log.txt': '已记录到 ~/drills/log.txt',
+    'Could not write ~/drills/log.txt': '无法写入 ~/drills/log.txt',
+    'Saving…': '正在保存…',
+    'Saved on this device': '已保存在本机',
+    'Could not save on this device': '无法保存在本机',
+  };
+  return labels[note] || note;
+}
+
 function decks() {
   return [...new Set(state.cards.map((c) => c.deck))].sort();
 }
@@ -61,14 +91,14 @@ function localDate(d = new Date()) {
 
 function fmtRelative(due) {
   const diff = due - Date.now();
-  if (diff <= 0) return 'now';
+  if (diff <= 0) return '现在';
   const m = Math.round(diff / 60000);
-  if (m < 60) return `in ${m}m`;
+  if (m < 60) return `${m} 分钟后`;
   const h = Math.round(m / 60);
-  if (h < 24) return `in ${h}h`;
+  if (h < 24) return `${h} 小时后`;
   const d = Math.round(h / 24);
-  if (d < 60) return `in ${d}d`;
-  return `in ${Math.round(d / 30)}mo`;
+  if (d < 60) return `${d} 天后`;
+  return `${Math.round(d / 30)} 个月后`;
 }
 
 let toastTimer;
@@ -87,10 +117,9 @@ function renderDeckControls() {
   if (state.deckFilter !== 'All' && !names.includes(state.deckFilter)) state.deckFilter = 'All';
   const sel = $('#deck-filter');
   sel.innerHTML = ['All', ...names]
-    .map((n) => `<option value="${esc(n)}">${esc(n)}</option>`)
+    .map((n) => `<option value="${esc(n)}">${esc(n === 'All' ? '全部' : deckDisplayName(n))}</option>`)
     .join('');
   sel.value = state.deckFilter;
-  $('#deck-names').innerHTML = names.map((n) => `<option value="${esc(n)}">`).join('');
 }
 
 /* ---------- review session ---------- */
@@ -120,25 +149,25 @@ function stepCard(dir) {
 }
 
 function deckLabel() {
-  return state.deckFilter === 'All' ? 'any deck' : state.deckFilter;
+  return state.deckFilter === 'All' ? '全部分类' : deckDisplayName(state.deckFilter);
 }
 
 function renderReview() {
   const s = state.session;
   const area = $('#review-area');
-  $('#due-count').textContent = s.complete ? '' : `Due: ${s.queue.length}`;
+  $('#due-count').textContent = s.complete ? '' : `待复习：${s.queue.length} 张卡片`;
 
   if (s.complete) {
     const pct = Math.round((s.correct / s.reviewed) * 100);
-    const logNote = FlashStore.logNote(s.logged);
+    const logNote = localizedLogNote(s.logged);
     area.innerHTML = `
       <div class="panel complete-panel">
-        <div class="micro-label">Session complete · ${esc(deckLabel())}</div>
-        <p class="complete-stats">${s.reviewed} reviewed · ${s.correct} got it · ${s.again} again · ${pct}% accuracy</p>
+        <div class="micro-label">本轮完成 · ${esc(deckLabel())}</div>
+        <p class="complete-stats">已复习 ${s.reviewed} 张卡片 · 记住了 ${s.correct} 张 · 再来一次 ${s.again} 张 · 正确率 ${pct}%</p>
         <div class="micro-label lognote${s.logged === false ? ' warn' : ''}">${logNote}</div>
         <div class="complete-actions">
-          <button class="btn btn-primary" id="copy-stats-complete">Copy stats for Claude</button>
-          <button class="btn" id="review-again">Review again</button>
+          <button class="btn btn-primary" id="copy-stats-complete">复制学习统计</button>
+          <button class="btn" id="review-again">再次复习</button>
         </div>
         <pre id="stats-fallback-complete" class="stats-pre" hidden></pre>
       </div>`;
@@ -149,12 +178,12 @@ function renderReview() {
     const pool = state.cards.filter(inFilter);
     const upcoming = pool.filter((c) => !dueNow(c)).sort((a, b) => a.due - b.due)[0];
     const hint = pool.length === 0
-      ? 'No cards in this deck yet — add some.'
-      : upcoming ? `Next card due ${fmtRelative(upcoming.due)}.` : '';
+      ? '这个分类还没有卡片，去新增一些吧。'
+      : upcoming ? `下张卡片复习时间：${fmtRelative(upcoming.due)}。` : '';
     area.innerHTML = `
       <div class="panel empty-panel">
-        <div class="micro-label">All clear</div>
-        <p>Nothing due in ${esc(deckLabel())}.</p>
+        <div class="micro-label">暂无待复习卡片</div>
+        <p>${esc(deckLabel())}当前没有待复习卡片。</p>
         <p class="muted">${esc(hint)}</p>
       </div>`;
     return;
@@ -165,24 +194,29 @@ function renderReview() {
   const arrowsOff = s.queue.length < 2 ? 'disabled' : '';
   area.innerHTML = `
     <div class="review-stage">
-      <button class="card-arrow" id="card-prev" title="Previous card (←)" aria-label="Previous card" ${arrowsOff}>‹</button>
-      <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
-        <div class="card-flip-inner">
-          <div class="card-face face-front" aria-hidden="${s.revealed}">
-            <div class="card-front">${esc(card.front)}</div>
-            <div class="micro-label">Tap to reveal · space</div>
+      <button class="card-arrow" id="card-prev" title="上一张（←）" aria-label="上一张" ${arrowsOff}>‹</button>
+      <div class="card-slot">
+        <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
+          <div class="card-flip-inner">
+            <div class="card-face face-front" aria-hidden="${s.revealed}">
+              <div class="card-front">${esc(card.front)}</div>
+              <div class="micro-label">点击查看答案 · 空格键</div>
+            </div>
+            <div class="card-face face-back" aria-hidden="${!s.revealed}">
+              <div class="card-front">${esc(card.front)}</div>
+              <div class="card-back">${esc(card.back)}</div>
+              <div class="micro-label">点击返回正面 · 空格键</div>
+            </div>
           </div>
-          <div class="card-face face-back" aria-hidden="${!s.revealed}">
-            <div class="card-front">${esc(card.front)}</div>
-            <div class="card-back">${esc(card.back)}</div>
-            <div class="micro-label">Tap to flip back · space</div>
-          </div>
-        </div>
-      </button>
-      <button class="card-arrow" id="card-next" title="Next card (→)" aria-label="Next card" ${arrowsOff}>›</button>
+        </button>
+        <button type="button" class="speak-front" id="speak-front"
+          title="美式发音" aria-label="美式发音"
+          ${s.revealed ? 'hidden' : ''}>🔊</button>
+      </div>
+      <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
       <div class="grade-row" ${s.revealed ? '' : 'hidden'}>
-        <button class="btn-grade btn-again" id="grade-again" title="Back in 10 minutes (key: 1)">Again</button>
-        <button class="btn-grade btn-got" id="grade-got" title="Streak climbs the interval ladder (key: 2)">Got it</button>
+        <button class="btn-grade btn-again" id="grade-again" title="10 分钟后再复习（按键：1）">再来一次</button>
+        <button class="btn-grade btn-got" id="grade-got" title="延长下次复习间隔（按键：2）">记住了</button>
       </div>
     </div>`;
 }
@@ -196,6 +230,8 @@ function setFlipped(flipped) {
   face.classList.toggle('revealable', !flipped);
   face.querySelector('.face-front').setAttribute('aria-hidden', String(flipped));
   face.querySelector('.face-back').setAttribute('aria-hidden', String(!flipped));
+  const speak = $('#speak-front');
+  if (speak) speak.hidden = flipped;
   $('#review-area .grade-row').hidden = !flipped;
 }
 
@@ -224,7 +260,7 @@ async function grade(kind) {
   try {
     ({ card } = await FlashStore.gradeCard(id, kind));
   } catch (err) {
-    toast(`Save failed: ${err.message}`);
+    toast(`保存失败： ${err.message}`);
     s.grading = false;
     return;
   }
@@ -247,7 +283,7 @@ async function grade(kind) {
       if (tIdx !== -1) state.cards[tIdx] = twinCard;
     } catch (err) {
       // Not fatal: the twin keeps its old schedule and surfaces next session.
-      toast(`Twin card save failed: ${err.message}`);
+      toast(`关联卡片保存失败： ${err.message}`);
     }
   }
 
@@ -291,9 +327,9 @@ function statsText() {
   const deckLine = names.length
     ? names.map((d) => {
         const cs = state.cards.filter((c) => c.deck === d);
-        return `${d} ${cs.length} cards (${cs.filter(dueNow).length} due)`;
+        return `${deckDisplayName(d)} ${cs.length} 张卡片（${cs.filter(dueNow).length} 张待复习）`;
       }).join(' · ')
-    : 'no cards';
+    : '暂无卡片';
 
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
   const dueToday = state.cards.filter((c) => c.due < endOfToday).length;
@@ -302,7 +338,7 @@ function statsText() {
   const recent = state.history.filter((h) => h.date >= cutoff);
   const rev = recent.reduce((n, h) => n + h.reviewed, 0);
   const cor = recent.reduce((n, h) => n + h.correct, 0);
-  const accLine = rev ? `${Math.round((cor / rev) * 100)}% (${rev} reviews)` : 'no reviews yet';
+  const accLine = rev ? `${Math.round((cor / rev) * 100)}%（复习 ${rev} 次）` : '暂无复习记录';
 
   const lapsed = state.cards
     .filter((c) => c.lapses > 0)
@@ -310,14 +346,14 @@ function statsText() {
     .slice(0, 5);
   const lapsedLine = lapsed.length
     ? lapsed.map((c) => `"${c.front}" ×${c.lapses}`).join(', ')
-    : 'none yet';
+    : '暂无';
 
   return [
-    `FlashDesk stats — ${localDate(now)}`,
-    `Decks: ${deckLine}`,
-    `Due today (all decks): ${dueToday}`,
-    `Accuracy last 7 days: ${accLine}`,
-    `Most-lapsed: ${lapsedLine}`,
+    `FlashDesk 学习统计 — ${localDate(now)}`,
+    `分类： ${deckLine}`,
+    `今日待复习（全部分类）： ${dueToday}`,
+    `近 7 天正确率： ${accLine}`,
+    `遗忘最多的卡片： ${lapsedLine}`,
   ].join('\n');
 }
 
@@ -342,7 +378,7 @@ async function copyStats(btn, fallbackPre) {
   }
   if (ok) {
     const orig = btn.textContent;
-    btn.textContent = 'Copied ✓';
+    btn.textContent = '已复制 ✓';
     setTimeout(() => { btn.textContent = orig; }, 1500);
   } else if (fallbackPre) {
     fallbackPre.textContent = text;
@@ -355,7 +391,7 @@ async function copyStats(btn, fallbackPre) {
 const QUIZ_LENGTHS = [10, 20, 'All'];
 const DEFAULT_QUIZ_SIZE = 20;
 const QUIZ_DIRECTIONS = ['keyword', 'definition', 'mixed'];
-const QUIZ_DIR_LABELS = { keyword: 'Keyword', definition: 'Definition', mixed: 'Mixed' };
+const QUIZ_DIR_LABELS = { keyword: '关键词', definition: '释义', mixed: '随机混合' };
 
 function quizDirection() {
   try {
@@ -471,17 +507,17 @@ function renderQuiz() {
     if (pool.length < 4) {
       area.innerHTML = `
         <div class="panel quiz-start">
-          <div class="micro-label">Quiz</div>
-          <p>Need at least 4 distinct words in ${esc(deckLabel())} to build a quiz.</p>
+          <div class="micro-label">测验</div>
+          <p>${esc(deckLabel())}至少需要 4 个不同词条才能开始测验。</p>
         </div>`;
       return;
     }
     area.innerHTML = `
       <div class="panel quiz-start">
-        <div class="micro-label">Quiz · ${esc(deckLabel())}</div>
-        <p>Questions are drawn at random; missed cards go straight back into your Review queue.</p>
+        <div class="micro-label">测验 · ${esc(deckLabel())}</div>
+        <p>题目随机抽取；答错的卡片会立即回到复习队列。</p>
         <div class="quiz-length">
-          <span class="micro-label">Direction</span>
+          <span class="micro-label">出题方向</span>
           <div class="quiz-length-opts">
             ${QUIZ_DIRECTIONS.map((d) => {
               const active = q.direction === d ? ' active' : '';
@@ -490,16 +526,16 @@ function renderQuiz() {
           </div>
         </div>
         <div class="quiz-length">
-          <span class="micro-label">Length</span>
+          <span class="micro-label">题数</span>
           <div class="quiz-length-opts">
             ${QUIZ_LENGTHS.map((len) => {
               const active = q.size === len ? ' active' : '';
-              const label = len === 'All' ? `All (${pool.length})` : len;
+              const label = len === 'All' ? `全部（${pool.length} 题）` : len;
               return `<button class="quiz-len${active}" data-size="${len}">${label}</button>`;
             }).join('')}
           </div>
         </div>
-        <button class="btn btn-primary" id="quiz-start-btn">Start quiz</button>
+        <button class="btn btn-primary" id="quiz-start-btn">开始测验</button>
       </div>`;
     return;
   }
@@ -508,7 +544,7 @@ function renderQuiz() {
     const question = q.questions[q.idx];
     const answered = q.answered !== null;
     area.innerHTML = `
-      <div class="micro-label quiz-progress">Question ${q.idx + 1}/${q.questions.length}</div>
+      <div class="micro-label quiz-progress">第 ${q.idx + 1} / ${q.questions.length} 题</div>
       <div class="quiz-question"><div class="card-front">${esc(question.front)}</div></div>
       <div class="quiz-choices">
         ${question.choices.map((choice, i) => {
@@ -521,7 +557,7 @@ function renderQuiz() {
         }).join('')}
       </div>
       ${answered
-        ? `<div class="quiz-next-row"><button class="btn btn-primary" id="quiz-next">${q.idx + 1 < q.questions.length ? 'Next' : 'See results'}</button></div>`
+        ? `<div class="quiz-next-row"><button class="btn btn-primary" id="quiz-next">${q.idx + 1 < q.questions.length ? '下一题' : '查看结果'}</button></div>`
         : ''}`;
     return;
   }
@@ -529,11 +565,11 @@ function renderQuiz() {
   const total = q.questions.length;
   const pct = Math.round((q.correct / total) * 100);
   const missed = q.missedIds.map((id) => q.questions.find((qq) => qq.cardId === id)).filter(Boolean);
-  const logNote = FlashStore.logNote(q.logged);
+  const logNote = localizedLogNote(q.logged);
   area.innerHTML = `
     <div class="panel quiz-done">
-      <div class="micro-label">Quiz complete · ${esc(deckLabel())}</div>
-      <div class="quiz-score">${q.correct}/${total} · ${pct}%</div>
+      <div class="micro-label">测验完成 · ${esc(deckLabel())}</div>
+      <div class="quiz-score">得分：${q.correct}/${total} · 正确率 ${pct}%</div>
       <div class="micro-label lognote${q.logged === false ? ' warn' : ''}">${logNote}</div>
       ${missed.length
         ? `<div class="quiz-missed">
@@ -543,9 +579,9 @@ function renderQuiz() {
                 <div class="answer">${esc(m.correct)}</div>
               </div>`).join('')}
           </div>
-          <p class="muted">These cards are back in your Review queue.</p>`
-        : '<p class="muted">Perfect round — nothing missed.</p>'}
-      <button class="btn btn-primary" id="quiz-restart">New quiz</button>
+          <p class="muted">这些卡片已回到复习队列。</p>`
+        : '<p class="muted">全部答对，继续保持！</p>'}
+      <button class="btn btn-primary" id="quiz-restart">再测一次</button>
     </div>`;
 }
 
@@ -553,18 +589,48 @@ function renderQuiz() {
 
 function renderBrowse() {
   const cards = state.cards.filter(inFilter).sort((a, b) => a.due - b.due);
-  const scope = state.deckFilter === 'All' ? '' : ` · ${state.deckFilter}`;
-  $('#browse-count').textContent = `${cards.length} card${cards.length === 1 ? '' : 's'}${scope}`;
-  $('#browse-table tbody').innerHTML = cards.map((c) => `
-    <tr>
-      <td class="cell-text" title="${esc(c.front)}">${esc(c.front)}</td>
-      <td class="cell-text" title="${esc(c.back)}">${esc(c.back)}</td>
-      <td class="num">${esc(c.deck)}</td>
-      <td class="num">${fmtRelative(c.due)}</td>
-      <td class="num">${c.streak}</td>
-      <td class="num">${c.lapses}</td>
-      <td><button class="x-btn" data-del="${esc(c.id)}" title="Delete card">✕</button></td>
-    </tr>`).join('');
+  const scope = state.deckFilter === 'All' ? '' : ` · ${deckDisplayName(state.deckFilter)}`;
+  $('#browse-count').textContent = `${cards.length} 张卡片${scope}`;
+
+  const groups = new Map();
+  for (const card of cards) {
+    if (!groups.has(card.deck)) groups.set(card.deck, []);
+    groups.get(card.deck).push(card);
+  }
+
+  const priority = { Words: 0, Sentences: 1 };
+  const deckNames = [...groups.keys()].sort((a, b) => {
+    const rankA = priority[a] ?? 2;
+    const rankB = priority[b] ?? 2;
+    return rankA - rankB || a.localeCompare(b);
+  });
+
+  $('#browse-table tbody').innerHTML = deckNames.map((deck) => {
+    const group = groups.get(deck);
+    const label = `${deckDisplayName(deck)} · ${group.length} 张`;
+    const rows = group.map((c) => `
+      <tr>
+        <td class="cell-text" title="${esc(c.front)}">${esc(c.front)}</td>
+        <td class="cell-text" title="${esc(c.back)}">${esc(c.back)}</td>
+        <td class="num">${esc(deckDisplayName(c.deck))}</td>
+        <td class="num">${fmtRelative(c.due)}</td>
+        <td class="num">${c.streak}</td>
+        <td class="num">${c.lapses}</td>
+        <td><button class="x-btn" data-del="${esc(c.id)}" title="删除卡片">✕</button></td>
+      </tr>`).join('');
+    return `<tr class="browse-group-row"><th colspan="7" scope="rowgroup">${esc(label)}</th></tr>${rows}`;
+  }).join('');
+}
+
+/* ---------- add form ---------- */
+
+function updateAddForm() {
+  const isSentence = $('#add-type').value === 'Sentences';
+  $('#add-front-label').textContent = isSentence ? '英文长句' : '英文单词';
+  $('#add-front').placeholder = isSentence ? '例如：Could you help me with this?' : '例如：apple';
+  $('#add-back-label').textContent = isSentence ? '中文理解 / 学习备注' : '中文意思 / 学习备注';
+  $('#add-back').placeholder = isSentence ? '填写句子的中文理解或学习备注' : '例如：苹果；可填写用法备注';
+  $('#add-submit').textContent = isSentence ? '添加长句' : '添加单词';
 }
 
 /* ---------- views ---------- */
@@ -584,9 +650,7 @@ function switchView(name) {
     renderBrowse();
     if (FlashStore.exportData) $('#data-panel').hidden = false;
   } else if (name === 'add') {
-    if (!$('#add-deck').value.trim()) {
-      $('#add-deck').value = state.deckFilter === 'All' ? 'AI-901' : state.deckFilter;
-    }
+    updateAddForm();
     $('#add-front').focus();
   }
 }
@@ -615,7 +679,11 @@ function bindEvents() {
   $('#review-area').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.id === 'card-face') toggleFlip();
+    if (b.id === 'speak-front') {
+      e.stopPropagation();
+      const card = state.cards.find((c) => c.id === state.session.currentId);
+      if (card) speakEnglish(card.front);
+    } else if (b.id === 'card-face') toggleFlip();
     else if (b.id === 'card-prev') stepCard(-1);
     else if (b.id === 'card-next') stepCard(1);
     else if (b.id === 'grade-again') grade('again');
@@ -684,11 +752,13 @@ function bindEvents() {
     } else if (b.dataset.choice !== undefined) answerQuiz(Number(b.dataset.choice));
   });
 
+  $('#add-type').addEventListener('change', updateAddForm);
+
   $('#add-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const front = $('#add-front').value.trim();
     const back = $('#add-back').value.trim();
-    const deck = $('#add-deck').value.trim();
+    const deck = $('#add-type').value;
     if (!front || !back || !deck) return;
     try {
       const { card } = await FlashStore.addCard({ front, back, deck });
@@ -702,7 +772,7 @@ function bindEvents() {
       flash._t = setTimeout(() => { flash.hidden = true; }, 1800);
       $('#add-front').focus();
     } catch (err) {
-      toast(`Add failed: ${err.message}`);
+      toast(`添加失败： ${err.message}`);
     }
   });
 
@@ -715,7 +785,7 @@ function bindEvents() {
     if (!btn) return;
     if (!btn.dataset.armed) {
       btn.dataset.armed = '1';
-      btn.textContent = 'sure?';
+      btn.textContent = '确认删除？';
       btn.classList.add('confirm');
       return;
     }
@@ -726,7 +796,7 @@ function bindEvents() {
       renderDeckControls();
       renderBrowse();
     } catch (err) {
-      toast(`Delete failed: ${err.message}`);
+      toast(`删除失败： ${err.message}`);
     }
   });
 
@@ -738,11 +808,11 @@ function bindEvents() {
     if (!FlashStore.exportData) return;
     const text = FlashStore.exportData();
     $('#data-json').value = text;
-    $('#data-msg').textContent = 'Exported. Copy this somewhere safe (Notes works well).';
+    $('#data-msg').textContent = '已导出，请复制并保存到安全的位置。';
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
-        $('#data-msg').textContent = 'Exported and copied to clipboard.';
+        $('#data-msg').textContent = '已导出并复制到剪贴板。';
       }
     } catch { /* textarea copy is enough */ }
   });
@@ -751,15 +821,18 @@ function bindEvents() {
     if (!FlashStore.importData) return;
     const text = $('#data-json').value.trim();
     if (!text) {
-      $('#data-msg').textContent = 'Paste exported JSON above first.';
+      $('#data-msg').textContent = '请先在上方粘贴导出的 JSON。';
       return;
     }
     try {
       const summary = FlashStore.importData(text);
-      $('#data-msg').textContent = `${summary} Reloading…`;
+      const summaryLabel = summary
+        .replace(/^Merged (\d+) new cards? \((\d+) duplicates? skipped\)\.$/, '已合并 $1 张新卡片（跳过 $2 张重复卡片）。')
+        .replace(/^Imported (\d+) cards \(full replace\)\.$/, '已导入 $1 张卡片（替换全部数据）。');
+      $('#data-msg').textContent = `${summaryLabel} 正在重新加载…`;
       setTimeout(() => location.reload(), 700);
     } catch (err) {
-      $('#data-msg').textContent = `Import failed: ${err.message}`;
+      $('#data-msg').textContent = `导入失败： ${err.message}`;
     }
   });
 }
@@ -773,7 +846,7 @@ async function init() {
     state.cards = cards;
     state.history = history;
   } catch (err) {
-    $('#review-area').innerHTML = `<div class="panel empty-panel"><p>Could not load cards: ${esc(err.message)}</p></div>`;
+    $('#review-area').innerHTML = `<div class="panel empty-panel"><p>无法加载卡片： ${esc(err.message)}</p></div>`;
     $('#view-review').hidden = false;
     return;
   }

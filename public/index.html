@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -12,15 +12,15 @@
     <header class="header">
       <div class="wordmark">
         <h1>Flash<span class="accent">Desk</span></h1>
-        <div class="micro-label">Spaced repetition</div>
+        <div class="micro-label">间隔复习</div>
       </div>
       <nav class="nav">
-        <button class="btn tab" data-view="review">Review</button>
-        <button class="btn tab" data-view="quiz">Quiz</button>
-        <button class="btn tab" data-view="add">Add Card</button>
-        <button class="btn tab" data-view="browse">Browse</button>
+        <button class="btn tab" data-view="review">复习</button>
+        <button class="btn tab" data-view="quiz">测验</button>
+        <button class="btn tab" data-view="add">新增</button>
+        <button class="btn tab" data-view="browse">词库</button>
         <label class="deck-filter">
-          <span class="micro-label">Deck</span>
+          <span class="micro-label">分类</span>
           <select id="deck-filter"></select>
         </label>
       </nav>
@@ -30,9 +30,9 @@
       <div class="review-top">
         <div class="micro-label" id="due-count"></div>
         <div class="dir-switch" id="dir-switch" hidden>
-          <button class="dir-opt" data-dir="keyword">Keyword</button>
-          <button class="dir-opt" data-dir="description">Description</button>
-          <button class="dir-opt" data-dir="mixed">Mixed</button>
+          <button class="dir-opt" data-dir="keyword">关键词</button>
+          <button class="dir-opt" data-dir="description">释义</button>
+          <button class="dir-opt" data-dir="mixed">随机混合</button>
         </div>
       </div>
       <div id="review-area"></div>
@@ -45,21 +45,23 @@
     <section id="view-add" hidden>
       <form id="add-form" class="panel form-panel">
         <label class="field">
-          <span class="micro-label">Front</span>
-          <textarea id="add-front" rows="3" required></textarea>
+          <span class="micro-label">内容类型</span>
+          <select id="add-type">
+            <option value="Words" selected>单词</option>
+            <option value="Sentences">长句</option>
+          </select>
         </label>
         <label class="field">
-          <span class="micro-label">Back</span>
-          <textarea id="add-back" rows="3" required></textarea>
+          <span class="micro-label" id="add-front-label">英文单词</span>
+          <textarea id="add-front" rows="3" placeholder="例如：apple" required></textarea>
         </label>
         <label class="field">
-          <span class="micro-label">Deck</span>
-          <input id="add-deck" list="deck-names" value="AI-901" required>
-          <datalist id="deck-names"></datalist>
+          <span class="micro-label" id="add-back-label">中文意思 / 学习备注</span>
+          <textarea id="add-back" rows="3" placeholder="例如：苹果；可填写用法备注" required></textarea>
         </label>
         <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Add card</button>
-          <span id="add-flash" class="micro-label flash" hidden>Added ✓</span>
+          <button type="submit" class="btn btn-primary" id="add-submit">添加单词</button>
+          <span id="add-flash" class="micro-label flash" hidden>已添加 ✓</span>
         </div>
       </form>
     </section>
@@ -67,19 +69,19 @@
     <section id="view-browse" hidden>
       <div class="browse-toolbar">
         <div class="micro-label" id="browse-count"></div>
-        <button class="btn" id="copy-stats-browse">Copy stats for Claude</button>
+        <button class="btn" id="copy-stats-browse">复制学习统计</button>
       </div>
       <div class="panel table-panel">
         <div class="table-wrap">
           <table id="browse-table">
             <thead>
               <tr>
-                <th>Front</th>
-                <th>Back</th>
-                <th>Deck</th>
-                <th>Due</th>
-                <th>Streak</th>
-                <th>Lapses</th>
+                <th>英文</th>
+                <th>中文 / 备注</th>
+                <th>分类</th>
+                <th>下次复习</th>
+                <th>连续记住</th>
+                <th>遗忘次数</th>
                 <th></th>
               </tr>
             </thead>
@@ -89,12 +91,12 @@
       </div>
       <pre id="stats-fallback" class="stats-pre" hidden></pre>
       <div id="data-panel" class="panel data-panel" hidden>
-        <div class="micro-label">Backup &amp; transfer</div>
-        <p class="muted">Export copies all cards and review history as JSON. Import accepts a full export (replaces everything) or a plain list of new cards (merges them in).</p>
+        <div class="micro-label">备份与迁移</div>
+        <p class="muted">导出会生成包含全部卡片和复习记录的 JSON。导入完整备份会替换全部数据；导入卡片列表则会合并新增卡片。</p>
         <textarea id="data-json" rows="6" spellcheck="false"></textarea>
         <div class="form-actions">
-          <button class="btn" id="export-data">Export</button>
-          <button class="btn" id="import-data">Import</button>
+          <button class="btn" id="export-data">导出</button>
+          <button class="btn" id="import-data">导入</button>
           <span class="micro-label" id="data-msg"></span>
         </div>
       </div>
