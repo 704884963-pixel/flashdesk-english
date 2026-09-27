@@ -36,6 +36,52 @@
         </div>
       </div>
       <div id="review-area"></div>
+      <details class="speech-settings panel" id="speech-settings">
+        <summary>语音设置</summary>
+        <div class="tts-settings-block">
+          <div class="micro-label">ElevenLabs 高质量发音</div>
+          <div class="speech-settings-grid tts-settings-grid">
+            <label class="field speech-voice-field">
+              <span class="micro-label">Worker 地址</span>
+              <input id="tts-endpoint" type="url" inputmode="url"
+                placeholder="https://your-worker.workers.dev" autocomplete="url">
+            </label>
+            <label class="field speech-token-field">
+              <span class="micro-label">访问密钥</span>
+              <input id="tts-token" type="password" placeholder="FLASHDESK_TTS_TOKEN"
+                autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <div class="form-actions speech-config-actions">
+            <button type="button" class="btn" id="tts-save">保存</button>
+            <button type="button" class="btn" id="tts-test">测试高质量发音</button>
+          </div>
+          <p class="speech-status" id="tts-status" aria-live="polite"></p>
+        </div>
+        <div class="system-speech-block">
+          <div class="micro-label">系统发音（备用）</div>
+        <div class="speech-settings-grid">
+          <label class="field speech-voice-field">
+            <span class="micro-label">美式英语声音</span>
+            <select id="speech-voice" aria-label="美式英语声音">
+              <option value="">正在读取设备声音…</option>
+            </select>
+          </label>
+          <label class="field speech-rate-field">
+            <span class="micro-label">语速</span>
+            <select id="speech-rate" aria-label="发音语速">
+              <option value="0.75">较慢 0.75</option>
+              <option value="0.85">慢 0.85</option>
+              <option value="0.9" selected>推荐 0.9</option>
+              <option value="1">正常 1.0</option>
+              <option value="1.1">较快 1.1</option>
+            </select>
+          </label>
+          <button type="button" class="btn speech-test" id="speech-test">试听</button>
+        </div>
+        <p class="speech-status" id="speech-status" aria-live="polite" hidden></p>
+        </div>
+      </details>
     </section>
 
     <section id="view-quiz" hidden>

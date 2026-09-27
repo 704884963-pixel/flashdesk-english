@@ -73,15 +73,353 @@ function wordBackHtml(card) {
   </div>`;
 }
 
-function speakEnglish(text) {
-  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') return;
-  const value = String(text || '').trim();
-  if (!value) return;
+function sentenceFrontHtml(text) {
+  const value = String(text || '');
+  const pattern = /[A-Za-z]+(?:['’][A-Za-z]+)*(?:-[A-Za-z]+(?:['’][A-Za-z]+)*)*/g;
+  let html = '';
+  let pos = 0;
+  for (const match of value.matchAll(pattern)) {
+    html += esc(value.slice(pos, match.index));
+    const word = match[0];
+    html += `<span class="speakable-word" data-speak-word="${esc(word)}">${esc(word)}</span>`;
+    pos = match.index + word.length;
+  }
+  return html + esc(value.slice(pos));
+}
 
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(value);
-  utterance.lang = 'en-US';
-  window.speechSynthesis.speak(utterance);
+const SPEECH_SETTINGS_KEY = 'flashdesk-speech-settings';
+const SPEECH_RATES = [0.75, 0.85, 0.9, 1, 1.1];
+const DEFAULT_SPEECH_RATE = 0.9;
+
+function loadSpeechSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SPEECH_SETTINGS_KEY) || '{}');
+    return {
+      voiceURI: typeof saved.voiceURI === 'string' ? saved.voiceURI : '',
+      rate: SPEECH_RATES.includes(Number(saved.rate)) ? Number(saved.rate) : DEFAULT_SPEECH_RATE,
+    };
+  } catch {
+    return { voiceURI: '', rate: DEFAULT_SPEECH_RATE };
+  }
+}
+
+const speechSettings = loadSpeechSettings();
+let speechVoices = [];
+let speechVoiceListenerBound = false;
+
+function saveSpeechSettings() {
+  try { localStorage.setItem(SPEECH_SETTINGS_KEY, JSON.stringify(speechSettings)); } catch { /* private mode */ }
+}
+
+function voiceNameRank(voice) {
+  const name = String(voice.name || '').toLowerCase();
+  if (name.includes('google')) return 0;
+  if (name.includes('us english') || name.includes('united states')) return 1;
+  return 2;
+}
+
+function voiceLanguageRank(voice) {
+  const lang = String(voice.lang || '').toLowerCase();
+  if (lang === 'en-us') return 0;
+  if (lang.startsWith('en-us')) return 1;
+  if (lang.startsWith('en-')) return 2;
+  return 3;
+}
+
+function rankEnglishVoices(voices) {
+  return [...voices]
+    .filter((voice) => voiceLanguageRank(voice) < 3)
+    .sort((a, b) => voiceLanguageRank(a) - voiceLanguageRank(b)
+      || voiceNameRank(a) - voiceNameRank(b)
+      || String(a.name || '').localeCompare(String(b.name || ''), 'en'));
+}
+
+function speechSupported() {
+  return typeof window !== 'undefined'
+    && 'speechSynthesis' in window
+    && typeof SpeechSynthesisUtterance !== 'undefined';
+}
+
+function selectedSpeechVoice() {
+  return speechVoices.find((voice) => voice.voiceURI === speechSettings.voiceURI)
+    || speechVoices[0]
+    || null;
+}
+
+function renderSpeechSettings() {
+  const select = $('#speech-voice');
+  const status = $('#speech-status');
+  const rate = $('#speech-rate');
+  const test = $('#speech-test');
+  if (!select || !status || !rate || !test) return;
+
+  rate.value = String(speechSettings.rate);
+  if (!speechSupported()) {
+    select.innerHTML = '<option value="">语音不可用</option>';
+    select.disabled = true;
+    rate.disabled = true;
+    test.disabled = true;
+    status.hidden = false;
+    status.textContent = '当前浏览器不支持语音朗读，请使用 Chrome 或支持 Web Speech API 的浏览器。';
+    return;
+  }
+
+  rate.disabled = false;
+  test.disabled = false;
+  if (!speechVoices.length) {
+    select.innerHTML = '<option value="">系统默认英语声音 · en-US</option>';
+    select.disabled = true;
+    status.hidden = false;
+    status.textContent = '正在读取设备声音；仍可使用系统默认美式发音。';
+    return;
+  }
+
+  select.disabled = false;
+  select.innerHTML = speechVoices.map((voice) =>
+    `<option value="${esc(voice.voiceURI)}">${esc(voice.name || 'English')} · ${esc(voice.lang || 'en')}</option>`).join('');
+  const selected = selectedSpeechVoice();
+  select.value = selected ? selected.voiceURI : '';
+  status.hidden = true;
+}
+
+function refreshSpeechVoices() {
+  if (!speechSupported()) {
+    speechVoices = [];
+  } else {
+    try { speechVoices = rankEnglishVoices(window.speechSynthesis.getVoices()); } catch { speechVoices = []; }
+  }
+  renderSpeechSettings();
+}
+
+function initSpeechSettings() {
+  renderSpeechSettings();
+  if (!speechSupported()) return;
+  refreshSpeechVoices();
+  if (speechVoiceListenerBound) return;
+  const synthesis = window.speechSynthesis;
+  if (typeof synthesis.addEventListener === 'function') {
+    synthesis.addEventListener('voiceschanged', refreshSpeechVoices);
+  } else {
+    synthesis.onvoiceschanged = refreshSpeechVoices;
+  }
+  speechVoiceListenerBound = true;
+}
+
+function speakEnglish(text, options = {}) {
+  if (!speechSupported()) return false;
+  const value = String(text || '').trim();
+  if (!value) return false;
+
+  try {
+    const synthesis = window.speechSynthesis;
+    if (!speechVoices.length) refreshSpeechVoices();
+    synthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(value);
+    utterance.lang = 'en-US';
+    const voice = selectedSpeechVoice();
+    if (voice) utterance.voice = voice;
+    utterance.rate = Number.isFinite(options.rate) ? options.rate : speechSettings.rate;
+    utterance.pitch = 1;
+    if (typeof synthesis.resume === 'function') synthesis.resume();
+    synthesis.speak(utterance);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function previewSpeech() {
+  speakEnglish('Hello, this is a pronunciation test.');
+}
+
+const TTS_SETTINGS_KEY = 'flashdesk-tts-settings';
+const TTS_SAMPLE = 'Hello, this is a pronunciation test.';
+
+function normalizeTtsEndpoint(value) {
+  const input = String(value || '').trim();
+  if (!input) return '';
+  try {
+    const url = new URL(input);
+    const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+    if (url.protocol !== 'https:' && !localHttp) return '';
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/tts$/, '') || '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function loadTtsSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TTS_SETTINGS_KEY) || '{}');
+    return {
+      endpoint: normalizeTtsEndpoint(saved.endpoint),
+      token: typeof saved.token === 'string' ? saved.token : '',
+    };
+  } catch {
+    return { endpoint: '', token: '' };
+  }
+}
+
+const ttsSettings = loadTtsSettings();
+const ttsAudioCache = new Map();
+const ttsPendingAudio = new Map();
+const ttsVoiceByEndpoint = new Map();
+const loadingSpeechButtons = new Set();
+let currentEnglishAudio = null;
+let englishPlaybackRequest = 0;
+
+function ttsConfigured() {
+  return Boolean(ttsSettings.endpoint && ttsSettings.token);
+}
+
+function saveTtsSettings() {
+  try { localStorage.setItem(TTS_SETTINGS_KEY, JSON.stringify(ttsSettings)); } catch { /* private mode */ }
+}
+
+function setTtsStatus(message, isError = false) {
+  const status = $('#tts-status');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('warn', isError);
+}
+
+function renderTtsSettings() {
+  const endpoint = $('#tts-endpoint');
+  const token = $('#tts-token');
+  if (!endpoint || !token) return;
+  endpoint.value = ttsSettings.endpoint;
+  token.value = ttsSettings.token;
+  setTtsStatus(ttsConfigured() ? '高质量发音已配置。' : '未配置时自动使用系统发音。');
+}
+
+function saveTtsSettingsFromForm() {
+  const endpointInput = $('#tts-endpoint').value.trim();
+  const token = $('#tts-token').value.trim();
+  if (!endpointInput && !token) {
+    ttsSettings.endpoint = '';
+    ttsSettings.token = '';
+    saveTtsSettings();
+    setTtsStatus('已清除高质量发音设置，将使用系统发音。');
+    return true;
+  }
+  const endpoint = normalizeTtsEndpoint(endpointInput);
+  if (!endpoint || !token) {
+    setTtsStatus('请填写有效的 HTTPS Worker 地址和访问密钥。', true);
+    return false;
+  }
+  ttsSettings.endpoint = endpoint;
+  ttsSettings.token = token;
+  saveTtsSettings();
+  $('#tts-endpoint').value = endpoint;
+  setTtsStatus('高质量发音设置已保存。');
+  return true;
+}
+
+function ttsCacheKey(text, voice = ttsVoiceByEndpoint.get(ttsSettings.endpoint) || 'worker-default') {
+  return JSON.stringify([ttsSettings.endpoint, voice, text]);
+}
+
+function ttsRequestUrl() {
+  return `${ttsSettings.endpoint}/tts`;
+}
+
+async function fetchTtsAudio(text) {
+  const key = ttsCacheKey(text);
+  if (ttsAudioCache.has(key)) return ttsAudioCache.get(key);
+  if (ttsPendingAudio.has(key)) return ttsPendingAudio.get(key);
+
+  const pending = (async () => {
+    const response = await fetch(ttsRequestUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ttsSettings.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) throw new Error(`TTS request failed (${response.status})`);
+    const voice = response.headers.get('X-FlashDesk-Voice-ID') || 'worker-default';
+    ttsVoiceByEndpoint.set(ttsSettings.endpoint, voice);
+    const blob = await response.blob();
+    if (!blob || !String(blob.type || '').startsWith('audio/')) throw new Error('TTS response is not audio');
+    const objectUrl = URL.createObjectURL(blob);
+    ttsAudioCache.set(ttsCacheKey(text, voice), objectUrl);
+    return objectUrl;
+  })();
+
+  ttsPendingAudio.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    ttsPendingAudio.delete(key);
+  }
+}
+
+function setSpeechButtonLoading(button, loading) {
+  if (!button) return;
+  if (loading) {
+    if (!button.dataset.speechLabel) button.dataset.speechLabel = button.textContent;
+    button.textContent = '加载中…';
+    button.disabled = true;
+    loadingSpeechButtons.add(button);
+  } else {
+    if (button.dataset.speechLabel) button.textContent = button.dataset.speechLabel;
+    button.disabled = false;
+    loadingSpeechButtons.delete(button);
+  }
+}
+
+function stopEnglishPlayback() {
+  englishPlaybackRequest += 1;
+  if (currentEnglishAudio) {
+    try { currentEnglishAudio.pause(); currentEnglishAudio.currentTime = 0; } catch { /* already stopped */ }
+    currentEnglishAudio = null;
+  }
+  if (speechSupported()) {
+    try { window.speechSynthesis.cancel(); } catch { /* unavailable */ }
+  }
+  for (const button of [...loadingSpeechButtons]) setSpeechButtonLoading(button, false);
+}
+
+async function playEnglish(text, options = {}) {
+  const value = String(text || '').trim();
+  if (!value) return 'failed';
+  const rate = Number(options.rate) === 0.75 ? 0.75 : 1;
+  const button = options.button || null;
+  stopEnglishPlayback();
+  const requestId = englishPlaybackRequest;
+
+  if (ttsConfigured() && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+    setSpeechButtonLoading(button, true);
+    try {
+      const objectUrl = await fetchTtsAudio(value);
+      if (requestId !== englishPlaybackRequest) return 'cancelled';
+      const audio = new Audio(objectUrl);
+      audio.playbackRate = rate;
+      currentEnglishAudio = audio;
+      await audio.play();
+      if (requestId !== englishPlaybackRequest) return 'cancelled';
+      setTtsStatus('正在使用 ElevenLabs 高质量发音。');
+      return 'elevenlabs';
+    } catch {
+      if (requestId !== englishPlaybackRequest) return 'cancelled';
+      setTtsStatus('高质量发音暂时不可用，已切换到系统发音。', true);
+    } finally {
+      setSpeechButtonLoading(button, false);
+    }
+  }
+
+  if (speakEnglish(value, { rate })) return 'system';
+  setTtsStatus('发音失败，请检查网络或语音设置。', true);
+  toast('发音失败，请检查网络或语音设置。');
+  return 'failed';
+}
+
+function previewHighQualitySpeech(button) {
+  return playEnglish(TTS_SAMPLE, { rate: 1, button });
 }
 
 function deckDisplayName(deck) {
@@ -218,6 +556,10 @@ function renderReview() {
   const card = state.cards.find((c) => c.id === s.queue[s.pos]);
   s.currentId = card.id;
   const arrowsOff = s.queue.length < 2 ? 'disabled' : '';
+  const sentence = card.deck === 'Sentences';
+  const frontHtml = sentence ? sentenceFrontHtml(card.front) : esc(card.front);
+  const normalLabel = sentence ? '🔊 整句' : '🔊 正常';
+  const slowLabel = sentence ? '🐢 慢速整句' : '🐢 慢速';
   area.innerHTML = `
     <div class="review-stage">
       <button class="card-arrow" id="card-prev" title="上一张（←）" aria-label="上一张" ${arrowsOff}>‹</button>
@@ -225,7 +567,7 @@ function renderReview() {
         <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
           <div class="card-flip-inner">
             <div class="card-face face-front" aria-hidden="${s.revealed}">
-              <div class="card-front">${esc(card.front)}</div>
+              <div class="card-front${sentence ? ' sentence-front' : ''}">${frontHtml}</div>
               <div class="micro-label">点击查看答案 · 空格键</div>
             </div>
             <div class="card-face face-back" aria-hidden="${!s.revealed}">
@@ -234,9 +576,12 @@ function renderReview() {
             </div>
           </div>
         </button>
-        <button type="button" class="speak-front" id="speak-front"
-          title="美式发音" aria-label="美式发音"
-          ${s.revealed ? 'hidden' : ''}>🔊</button>
+        <div class="speech-actions" ${s.revealed ? 'hidden' : ''}>
+          <button type="button" class="speak-front" id="speak-front" data-speak-rate="1"
+            title="美式英语正常发音" aria-label="${normalLabel}">${normalLabel}</button>
+          <button type="button" class="speak-front" id="speak-front-slow" data-speak-rate="0.75"
+            title="美式英语慢速发音" aria-label="${slowLabel}">${slowLabel}</button>
+        </div>
       </div>
       <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
       <div class="grade-row" ${s.revealed ? '' : 'hidden'}>
@@ -255,8 +600,8 @@ function setFlipped(flipped) {
   face.classList.toggle('revealable', !flipped);
   face.querySelector('.face-front').setAttribute('aria-hidden', String(flipped));
   face.querySelector('.face-back').setAttribute('aria-hidden', String(!flipped));
-  const speak = $('#speak-front');
-  if (speak) speak.hidden = flipped;
+  const speechActions = $('#review-area .speech-actions');
+  if (speechActions) speechActions.hidden = flipped;
   $('#review-area .grade-row').hidden = !flipped;
 }
 
@@ -662,6 +1007,7 @@ function updateAddForm() {
 /* ---------- views ---------- */
 
 function switchView(name) {
+  stopEnglishPlayback();
   state.view = name;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('btn-active', b.dataset.view === name));
   for (const v of ['review', 'quiz', 'add', 'browse']) $(`#view-${v}`).hidden = v !== name;
@@ -692,6 +1038,30 @@ function bindEvents() {
     switchView(state.view); // resets any in-progress session against the new filter
   });
 
+  $('#speech-voice').addEventListener('change', (e) => {
+    speechSettings.voiceURI = e.target.value;
+    saveSpeechSettings();
+  });
+
+  $('#speech-rate').addEventListener('change', (e) => {
+    const rate = Number(e.target.value);
+    speechSettings.rate = SPEECH_RATES.includes(rate) ? rate : DEFAULT_SPEECH_RATE;
+    e.target.value = String(speechSettings.rate);
+    saveSpeechSettings();
+  });
+
+  $('#speech-test').addEventListener('click', () => {
+    previewSpeech();
+  });
+
+  $('#tts-save').addEventListener('click', () => {
+    saveTtsSettingsFromForm();
+  });
+
+  $('#tts-test').addEventListener('click', (e) => {
+    if (saveTtsSettingsFromForm()) previewHighQualitySpeech(e.currentTarget);
+  });
+
   $('#dir-switch').addEventListener('click', (e) => {
     const b = e.target.closest('[data-dir]');
     if (!b || b.dataset.dir === state.direction) return;
@@ -703,12 +1073,21 @@ function bindEvents() {
   });
 
   $('#review-area').addEventListener('click', (e) => {
+    const word = e.target.closest('.speakable-word');
+    if (word) {
+      e.preventDefault();
+      e.stopPropagation();
+      word.classList.add('speaking');
+      setTimeout(() => word.classList.remove('speaking'), 450);
+      playEnglish(word.dataset.speakWord, { rate: 1 });
+      return;
+    }
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.id === 'speak-front') {
+    if (b.matches('[data-speak-rate]')) {
       e.stopPropagation();
       const card = state.cards.find((c) => c.id === state.session.currentId);
-      if (card) speakEnglish(card.front);
+      if (card) playEnglish(card.front, { rate: Number(b.dataset.speakRate), button: b });
     } else if (b.id === 'card-face') toggleFlip();
     else if (b.id === 'card-prev') stepCard(-1);
     else if (b.id === 'card-next') stepCard(1);
@@ -946,6 +1325,8 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  initSpeechSettings();
+  renderTtsSettings();
   try {
     const { cards, history } = await FlashStore.load();
     state.cards = cards;

@@ -163,6 +163,42 @@ select:focus, input:focus, textarea:focus {
 
 .review-top { display: flex; justify-content: space-between; margin-bottom: 12px; min-height: 1.2em; }
 
+.speech-settings {
+  margin-top: 14px;
+  padding: 14px 18px;
+}
+
+.speech-settings summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.tts-settings-block,
+.system-speech-block {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.system-speech-block {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.speech-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.speech-settings select { width: 100%; min-width: 0; }
+.speech-settings input { width: 100%; min-width: 0; }
+.speech-test { min-height: 43px; }
+.speech-status { margin-top: 10px; color: var(--muted); font-size: 0.86rem; }
+.speech-config-actions { flex-wrap: wrap; }
+
 .card-face {
   width: 100%;
   background: var(--panel);
@@ -444,21 +480,51 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 .card-slot { position: relative; min-width: 0; }
 
 .speak-front {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 1;
-  width: 40px;
-  height: 40px;
+  min-height: 40px;
   border: 1px solid var(--line);
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--panel-2);
   color: var(--text);
-  font-size: 1.1rem;
+  padding: 7px 11px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .speak-front[hidden] { display: none; }
+
+.speech-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+}
+
+.speech-actions[hidden] { display: none; }
+
+.speakable-word {
+  border-radius: 4px;
+  transition: color .12s, background .12s, box-shadow .12s;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.speakable-word:active,
+.speakable-word.speaking {
+  color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+}
+
+.sentence-front { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (hover: hover) {
   .speak-front:hover { border-color: var(--accent); }
@@ -581,6 +647,13 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   .app { padding: 16px 14px 48px; }
   .nav { margin-left: 0; }
   .panel { padding: 20px 16px; }
+  .speech-settings { padding: 14px; }
+  .speech-settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .speech-test { width: 100%; }
+  .speech-config-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .speech-config-actions .btn { width: 100%; }
+  .speech-actions { position: static; margin-top: 8px; max-width: none; }
+  .speech-actions .speak-front { flex: 1 1 120px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

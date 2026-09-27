@@ -1,4 +1,8 @@
 flashdesk-data.json
 backup/
+cloudflare/tts-worker/node_modules/
+cloudflare/tts-worker/.wrangler/
+cloudflare/tts-worker/.dev.vars*
+cloudflare/tts-worker/.env*
 *.corrupt-*.json
 .DS_Store
