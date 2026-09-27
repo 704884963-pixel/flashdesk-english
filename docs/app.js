@@ -1104,79 +1104,100 @@ async function copyStats(btn, fallbackPre) {
 
 /* ---------- quiz ---------- */
 
-const QUIZ_LENGTHS = [10, 20, 'All'];
+const QUIZ_LENGTHS = [10, 20, 30];
 const DEFAULT_QUIZ_SIZE = 20;
-const QUIZ_DIRECTIONS = ['keyword', 'definition', 'mixed'];
-const QUIZ_DIR_LABELS = { keyword: '关键词', definition: '释义', mixed: '随机混合' };
-
-function quizDirection() {
-  try {
-    const d = localStorage.getItem('flashdesk-quiz-direction');
-    return QUIZ_DIRECTIONS.includes(d) ? d : 'mixed';
-  } catch { return 'mixed'; }
-}
-
-function shuffle(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+const QUIZ_TYPE_LABELS = { 'zh-en': '中文 → 英文', 'en-zh': '英文 → 中文', 'audio-en': '听音 → 英文' };
+const QUIZ_SCOPE_LABELS = { smart: '智能混合', new: '新词优先', lapsed: '易错词优先', random: '全部随机' };
 
 function freshQuiz() {
-  return { phase: 'start', questions: [], idx: 0, correct: 0, missedIds: [], answered: null, logged: null, size: DEFAULT_QUIZ_SIZE, direction: quizDirection() };
+  return {
+    phase: 'start', questions: [], idx: 0, correct: 0, wrong: 0,
+    missedIds: [], retryScheduledIds: [], answered: null,
+    size: DEFAULT_QUIZ_SIZE,
+    types: { 'zh-en': true, 'en-zh': true, 'audio-en': true },
+    scope: 'smart', baseSize: 0, mode: 'normal', settingsError: '',
+  };
 }
 
-// Normalize each card to { term, definition } — shorter side is the term, longer side
-// the definition — then dedupe by term so reversed pairs collapse to one question.
-// This makes every quiz "here is the word, pick its definition" with all-definition choices.
 function quizPool() {
-  const seen = new Set();
-  const items = [];
-  for (const c of state.cards.filter(inFilter)) {
-    const [term, definition] = c.front.length <= c.back.length ? [c.front, c.back] : [c.back, c.front];
-    const key = term.trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    items.push({ cardId: c.id, term, definition });
+  return state.cards.filter((card) => card.deck === 'Words'
+    && String(card.front || '').trim() && String(card.back || '').trim());
+}
+
+function enabledQuizTypes(q = state.quiz) {
+  return FlashLogic.WORD_QUIZ_TYPES.filter((type) => q.types[type]);
+}
+
+function quizQuestionFor(card, type) {
+  return FlashLogic.buildWordQuizQuestion(quizPool(), card, type, Math.random);
+}
+
+function beginQuizWithCards(cards, mode = 'normal') {
+  const q = state.quiz;
+  const enabled = enabledQuizTypes(q);
+  if (!enabled.length) {
+    q.settingsError = '请至少选择一种题型。';
+    renderQuiz();
+    return;
   }
-  return items;
+  const types = FlashLogic.mixedWordQuizTypes(enabled, cards.length, Math.random);
+  q.questions = cards.map((card, index) => quizQuestionFor(card, types[index]));
+  q.phase = 'question';
+  q.idx = 0;
+  q.correct = 0;
+  q.wrong = 0;
+  q.missedIds = [];
+  q.retryScheduledIds = [];
+  q.answered = null;
+  q.baseSize = cards.length;
+  q.mode = mode;
+  q.settingsError = '';
+  renderQuiz();
 }
 
 function startQuiz() {
   const q = state.quiz;
   const pool = quizPool();
   if (pool.length < 4) return;
-  const count = q.size === 'All' ? pool.length : Math.min(q.size, pool.length);
-  q.questions = shuffle(pool).slice(0, count).map((item) => {
-    // keyword: word front, definition choices. definition: definition front,
-    // term choices (exam-shaped). mixed: coin flip per question.
-    const orientation = q.direction === 'mixed'
-      ? (Math.random() < 0.5 ? 'keyword' : 'definition')
-      : q.direction;
-    const side = orientation === 'keyword' ? 'definition' : 'term';
-    const front = orientation === 'keyword' ? item.term : item.definition;
-    const correct = orientation === 'keyword' ? item.definition : item.term;
-    const distractors = FlashLogic.buildChoices(pool, item, side);
-    return { cardId: item.cardId, front, correct, choices: shuffle([correct, ...distractors]) };
+  const cards = FlashLogic.selectWordQuizCards(pool, q.size, q.scope, Date.now(), Math.random);
+  beginQuizWithCards(cards);
+}
+
+function quizCard(id) {
+  return state.cards.find((card) => card.id === id);
+}
+
+function quizChoiceCard(question, choice) {
+  const key = String(choice).trim().toLowerCase();
+  return quizPool().find((card) => {
+    const text = question.type === 'en-zh' ? card.back : card.front;
+    return String(text).trim().toLowerCase() === key;
   });
-  q.phase = 'question';
-  q.idx = 0;
-  q.correct = 0;
-  q.missedIds = [];
-  q.answered = null;
-  renderQuiz();
 }
 
 function answerQuiz(i) {
   const q = state.quiz;
   if (q.phase !== 'question' || q.answered !== null) return;
-  q.answered = i;
   const question = q.questions[q.idx];
-  if (question.choices[i] === question.correct) q.correct += 1;
-  else q.missedIds.push(question.cardId);
+  if (!question || i < 0 || i >= question.choices.length) return;
+  const isCorrect = question.choices[i] === question.correct;
+  q.answered = { index: i, correct: isCorrect };
+  if (isCorrect) {
+    q.correct += 1;
+  } else {
+    q.wrong += 1;
+    if (!q.missedIds.includes(question.cardId)) q.missedIds.push(question.cardId);
+    if (!question.retry && !q.retryScheduledIds.includes(question.cardId)) {
+      const card = quizCard(question.cardId);
+      if (card) {
+        const type = FlashLogic.alternateWordQuizType(question.type, enabledQuizTypes(q), Math.random);
+        const retry = quizQuestionFor(card, type);
+        retry.retry = true;
+        q.questions = FlashLogic.insertWordQuizRetry(q.questions, q.idx, retry, 4);
+        q.retryScheduledIds.push(question.cardId);
+      }
+    }
+  }
   renderQuiz();
 }
 
@@ -1192,27 +1213,58 @@ function nextQuizQuestion() {
   }
 }
 
-async function finishQuiz() {
+function finishQuiz() {
   const q = state.quiz;
   q.phase = 'done';
   renderQuiz();
-  try {
-    const res = await FlashStore.logQuiz({
-      deck: state.deckFilter,
-      questions: q.questions.length,
-      correct: q.correct,
-      missedIds: q.missedIds,
-    });
-    q.logged = res.logged;
-  } catch {
-    q.logged = false;
+}
+
+function restartQuizSettings() {
+  const previous = state.quiz;
+  state.quiz = freshQuiz();
+  state.quiz.size = previous.size;
+  state.quiz.types = { ...previous.types };
+  state.quiz.scope = previous.scope;
+  renderQuiz();
+}
+
+function retestMissedQuiz() {
+  const cards = state.quiz.missedIds.map(quizCard).filter(Boolean);
+  if (!cards.length) return;
+  beginQuizWithCards(cards, 'missed');
+}
+
+function quizSpeechButtons(card) {
+  return `<div class="quiz-speech-actions">
+    <button type="button" class="btn quiz-speech" data-quiz-speak="${esc(card.id)}" data-speak-rate="1">🔊 正常</button>
+    <button type="button" class="btn quiz-speech" data-quiz-speak="${esc(card.id)}" data-speak-rate="0.75">🐢 慢速</button>
+  </div>`;
+}
+
+function quizFeedbackHtml(question) {
+  const q = state.quiz;
+  if (!q.answered) return '';
+  const card = quizCard(question.cardId);
+  if (!card) return '';
+  const selected = question.choices[q.answered.index];
+  if (q.answered.correct) {
+    return `<section class="panel quiz-feedback correct" aria-live="polite">
+      <div class="quiz-feedback-title">✓ 正确</div>
+      <div class="quiz-feedback-word">${esc(card.front)}</div>
+      <div class="quiz-feedback-meaning">${esc(card.back)}</div>
+      ${quizSpeechButtons(card)}
+    </section>`;
   }
-  try {
-    const { cards, history } = await FlashStore.load(); // missed cards are due now
-    state.cards = cards;
-    state.history = history;
-  } catch { /* keep the local copy */ }
-  if (state.view === 'quiz') renderQuiz();
+  const chosenCard = quizChoiceCard(question, selected);
+  const details = wordDetails(card);
+  return `<section class="panel quiz-feedback wrong" aria-live="polite">
+    <div class="quiz-feedback-title">✕ 回答错误</div>
+    <div class="quiz-answer-pair"><span>你选择</span><strong>${esc(chosenCard?.front || selected)}</strong><small>${esc(chosenCard?.back || '')}</small></div>
+    <div class="quiz-answer-pair correct-answer"><span>正确答案</span><strong>${esc(card.front)}</strong><small>${esc(card.back)}</small></div>
+    ${details.memoryReading ? `<div class="quiz-reading"><span>🧠 发音拆解</span>${esc(details.memoryReading)}</div>` : ''}
+    ${details.chineseReading ? `<div class="quiz-reading"><span>🗣 中文近似</span>${esc(details.chineseReading)}</div>` : ''}
+    ${quizSpeechButtons(card)}
+  </section>`;
 }
 
 function renderQuiz() {
@@ -1223,35 +1275,38 @@ function renderQuiz() {
     if (pool.length < 4) {
       area.innerHTML = `
         <div class="panel quiz-start">
-          <div class="micro-label">测验</div>
-          <p>${esc(deckLabel())}至少需要 4 个不同词条才能开始测验。</p>
+          <div class="micro-label">检测</div>
+          <p>单词库至少需要 4 个不同单词才能开始检测。</p>
         </div>`;
       return;
     }
     area.innerHTML = `
       <div class="panel quiz-start">
-        <div class="micro-label">测验 · ${esc(deckLabel())}</div>
-        <p>题目随机抽取；答错的卡片会立即回到复习队列。</p>
-        <div class="quiz-length">
-          <span class="micro-label">出题方向</span>
-          <div class="quiz-length-opts">
-            ${QUIZ_DIRECTIONS.map((d) => {
-              const active = q.direction === d ? ' active' : '';
-              return `<button class="quiz-len${active}" data-quizdir="${d}">${QUIZ_DIR_LABELS[d]}</button>`;
-            }).join('')}
-          </div>
+        <div class="quiz-start-heading">
+          <div class="micro-label">单词检测</div>
+          <h2>检测</h2>
+          <p>本次结果只用于检测，不改变复习进度。</p>
         </div>
-        <div class="quiz-length">
-          <span class="micro-label">题数</span>
-          <div class="quiz-length-opts">
-            ${QUIZ_LENGTHS.map((len) => {
-              const active = q.size === len ? ' active' : '';
-              const label = len === 'All' ? `全部（${pool.length} 题）` : len;
-              return `<button class="quiz-len${active}" data-size="${len}">${label}</button>`;
-            }).join('')}
+        <fieldset class="quiz-setting-group">
+          <legend>题量</legend>
+          <div class="quiz-setting-options compact">
+            ${QUIZ_LENGTHS.map((len) => `<button type="button" class="quiz-setting-btn${q.size === len ? ' active' : ''}" data-size="${len}" aria-pressed="${q.size === len}">${len}</button>`).join('')}
           </div>
-        </div>
-        <button class="btn btn-primary" id="quiz-start-btn">开始测验</button>
+        </fieldset>
+        <fieldset class="quiz-setting-group">
+          <legend>题型</legend>
+          <div class="quiz-setting-options quiz-type-options">
+            ${FlashLogic.WORD_QUIZ_TYPES.map((type) => `<button type="button" class="quiz-setting-btn quiz-check${q.types[type] ? ' active' : ''}" data-quiz-type="${type}" aria-pressed="${q.types[type]}">${q.types[type] ? '☑' : '☐'} ${QUIZ_TYPE_LABELS[type]}</button>`).join('')}
+          </div>
+        </fieldset>
+        <fieldset class="quiz-setting-group">
+          <legend>检测范围</legend>
+          <div class="quiz-setting-options quiz-scope-options">
+            ${Object.entries(QUIZ_SCOPE_LABELS).map(([scope, label]) => `<button type="button" class="quiz-setting-btn quiz-radio${q.scope === scope ? ' active' : ''}" data-quiz-scope="${scope}" aria-pressed="${q.scope === scope}">${q.scope === scope ? '●' : '○'} ${label}</button>`).join('')}
+          </div>
+        </fieldset>
+        ${q.settingsError ? `<p class="quiz-settings-error" role="alert">${esc(q.settingsError)}</p>` : ''}
+        <button class="btn btn-primary quiz-start-button" id="quiz-start-btn">开始检测</button>
       </div>`;
     return;
   }
@@ -1259,45 +1314,61 @@ function renderQuiz() {
   if (q.phase === 'question') {
     const question = q.questions[q.idx];
     const answered = q.answered !== null;
+    const progress = Math.min(q.idx + (answered ? 1 : 0), q.questions.length);
+    const typeLabel = QUIZ_TYPE_LABELS[question.type];
     area.innerHTML = `
-      <div class="micro-label quiz-progress">第 ${q.idx + 1} / ${q.questions.length} 题</div>
-      <div class="quiz-question"><div class="card-front">${esc(question.front)}</div></div>
+      <div class="quiz-progress-head">
+        <span><strong>${q.idx + 1} / ${q.questions.length}</strong>${q.questions.length > q.baseSize ? `<small>基础 ${q.baseSize}</small>` : ''}</span>
+        <span>正确 ${q.correct} · 错误 ${q.wrong}</span>
+      </div>
+      <progress class="quiz-progress-bar" value="${progress}" max="${q.questions.length}"></progress>
+      <div class="quiz-question">
+        <div class="micro-label">${typeLabel}${question.retry ? ' · 错题再现' : ''}</div>
+        ${question.type === 'audio-en'
+          ? `<button type="button" class="btn btn-primary quiz-listen" data-quiz-listen="${esc(question.cardId)}">🔊 ${answered ? '再听一次' : '播放发音'}</button>`
+          : `<div class="card-front">${esc(question.prompt)}</div>`}
+      </div>
       <div class="quiz-choices">
         ${question.choices.map((choice, i) => {
           let cls = 'quiz-choice';
+          let marker = String(i + 1);
           if (answered) {
-            if (choice === question.correct) cls += ' correct';
-            else if (i === q.answered) cls += ' wrong';
+            if (choice === question.correct) { cls += ' correct'; marker = '✓'; }
+            else if (i === q.answered.index) { cls += ' wrong'; marker = '✕'; }
           }
-          return `<button class="${cls}" data-choice="${i}" ${answered ? 'disabled' : ''}><span class="quiz-key">${i + 1}</span><span class="quiz-choice-text">${esc(choice)}</span></button>`;
+          return `<button class="${cls}" data-choice="${i}" ${answered ? 'disabled' : ''}><span class="quiz-key">${marker}</span><span class="quiz-choice-text">${esc(choice)}</span></button>`;
         }).join('')}
       </div>
+      ${quizFeedbackHtml(question)}
       ${answered
         ? `<div class="quiz-next-row"><button class="btn btn-primary" id="quiz-next">${q.idx + 1 < q.questions.length ? '下一题' : '查看结果'}</button></div>`
         : ''}`;
     return;
   }
 
-  const total = q.questions.length;
-  const pct = Math.round((q.correct / total) * 100);
-  const missed = q.missedIds.map((id) => q.questions.find((qq) => qq.cardId === id)).filter(Boolean);
-  const logNote = localizedLogNote(q.logged);
+  const result = FlashLogic.wordQuizResult(q.correct, q.correct + q.wrong);
+  const missed = q.missedIds.map(quizCard).filter(Boolean);
   area.innerHTML = `
     <div class="panel quiz-done">
-      <div class="micro-label">测验完成 · ${esc(deckLabel())}</div>
-      <div class="quiz-score">得分：${q.correct}/${total} · 正确率 ${pct}%</div>
-      <div class="micro-label lognote${q.logged === false ? ' warn' : ''}">${logNote}</div>
+      <div class="micro-label">${q.mode === 'missed' ? '错题重测完成' : '本次检测'}</div>
+      <div class="quiz-score">${result.correct} / ${result.total}</div>
+      <div class="quiz-result-rate">正确率 ${result.percentage}%</div>
+      <div class="quiz-result-counts"><span>答对：${result.correct}</span><span>答错：${result.wrong}</span></div>
       ${missed.length
         ? `<div class="quiz-missed">
-            ${missed.map((m) => `
+            <div class="micro-label">错题</div>
+            ${missed.map((card) => `
               <div class="quiz-missed-item">
-                <div>${esc(m.front)}</div>
-                <div class="answer">${esc(m.correct)}</div>
+                <div><strong>${esc(card.front)}</strong><div class="answer">${esc(card.back)}</div></div>
+                <button type="button" class="btn quiz-missed-speak" data-quiz-speak="${esc(card.id)}" data-speak-rate="1" aria-label="朗读 ${esc(card.front)}">🔊</button>
               </div>`).join('')}
-          </div>
-          <p class="muted">这些卡片已回到复习队列。</p>`
+          </div>`
         : '<p class="muted">全部答对，继续保持！</p>'}
-      <button class="btn btn-primary" id="quiz-restart">再测一次</button>
+      <div class="quiz-result-actions">
+        ${missed.length ? '<button class="btn btn-primary" id="quiz-retest">只重测错题</button>' : ''}
+        <button class="btn" id="quiz-restart">再测一次</button>
+        <button class="btn" id="quiz-to-review">返回复习</button>
+      </div>
     </div>`;
 }
 
@@ -1659,20 +1730,28 @@ function bindEvents() {
   $('#quiz-area').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.quizdir !== undefined) {
-      state.quiz.direction = b.dataset.quizdir;
-      try { localStorage.setItem('flashdesk-quiz-direction', state.quiz.direction); } catch { /* private mode */ }
+    if (b.dataset.quizType !== undefined) {
+      const type = b.dataset.quizType;
+      state.quiz.types[type] = !state.quiz.types[type];
+      state.quiz.settingsError = enabledQuizTypes().length ? '' : '请至少选择一种题型。';
       renderQuiz();
     } else if (b.dataset.size !== undefined) {
-      state.quiz.size = b.dataset.size === 'All' ? 'All' : Number(b.dataset.size);
+      state.quiz.size = Number(b.dataset.size);
+      renderQuiz();
+    } else if (b.dataset.quizScope !== undefined) {
+      state.quiz.scope = b.dataset.quizScope;
       renderQuiz();
     } else if (b.id === 'quiz-start-btn') startQuiz();
     else if (b.id === 'quiz-next') nextQuizQuestion();
-    else if (b.id === 'quiz-restart') {
-      const size = state.quiz.size;
-      state.quiz = freshQuiz();
-      state.quiz.size = size;
-      renderQuiz();
+    else if (b.id === 'quiz-restart') restartQuizSettings();
+    else if (b.id === 'quiz-retest') retestMissedQuiz();
+    else if (b.id === 'quiz-to-review') switchView('review');
+    else if (b.dataset.quizListen !== undefined) {
+      const card = quizCard(b.dataset.quizListen);
+      if (card) playEnglish(card.front, { rate: 1, button: b });
+    } else if (b.dataset.quizSpeak !== undefined) {
+      const card = quizCard(b.dataset.quizSpeak);
+      if (card) playEnglish(card.front, { rate: Number(b.dataset.speakRate) || 1, button: b });
     } else if (b.dataset.choice !== undefined) answerQuiz(Number(b.dataset.choice));
   });
 

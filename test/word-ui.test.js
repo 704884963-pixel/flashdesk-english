@@ -52,9 +52,9 @@ test('Add/Edit share forms parser for comma, Chinese comma and newline', () => {
   assert.equal(h.run("JSON.stringify(parseForms(' expected，expecting\\nexpected, Expected,  '))"), JSON.stringify(['expected', 'expecting', 'Expected']));
 });
 
-test('Quiz keeps existing front/back interpretation and ignores Word extras', () => {
+test('Quiz uses Word front/back and ignores Word extras', () => {
   const h = client([{ ...old, wordNumber: 138, memoryReading: 'not a choice', forms: ['not a question'] }]);
-  assert.equal(h.run('JSON.stringify(quizPool())'), JSON.stringify([{ cardId: 'old', term: '苹果', definition: 'apple' }]));
+  assert.equal(h.run('JSON.stringify(quizPool().map(({ id, front, back }) => ({ id, front, back })))'), JSON.stringify([{ id: 'old', front: 'apple', back: '苹果' }]));
 });
 
 test('Sentence Review keeps original front/back presentation', () => {
