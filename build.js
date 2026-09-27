@@ -41,6 +41,8 @@ fs.cpSync(PUBLIC, DOCS, { recursive: true });
 
 // 4. The PWA uses the local-storage adapter as its store.js.
 fs.copyFileSync(path.join(PWA, 'store-local.js'), path.join(DOCS, 'store.js'));
+// Long articles use a separate IndexedDB adapter in the PWA build.
+fs.copyFileSync(path.join(PWA, 'article-store-idb.js'), path.join(DOCS, 'article-store.js'));
 
 // 5. Inject the PWA head tags at the marker.
 const headSnippet = fs.readFileSync(path.join(PWA, 'head-snippet.html'), 'utf8').trimEnd();

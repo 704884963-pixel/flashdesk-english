@@ -1,4 +1,5 @@
 flashdesk-data.json
+flashdesk-articles.json
 backup/
 cloudflare/tts-worker/node_modules/
 cloudflare/tts-worker/.wrangler/

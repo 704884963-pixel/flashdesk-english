@@ -10,6 +10,8 @@ const ASSETS = [
   'app.js',
   'audio-cache.js',
   'batch-import.js',
+  'article-utils.js',
+  'article-store.js',
   'logic.js',
   'store.js',
   'default-data.json',

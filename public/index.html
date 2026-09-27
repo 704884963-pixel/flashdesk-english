@@ -19,6 +19,7 @@
         <button class="btn tab" data-view="quiz">检测</button>
         <button class="btn tab" data-view="add">新增</button>
         <button class="btn tab" data-view="words">单词库</button>
+        <button class="btn tab" data-view="reading">阅读</button>
         <button class="btn tab" data-view="browse">浏览</button>
         <label class="deck-filter">
           <span class="micro-label">分类</span>
@@ -187,6 +188,10 @@ back: 智能体接收查询。</pre>
       <div id="word-library"></div>
     </section>
 
+    <section id="view-reading" hidden>
+      <div id="article-root"></div>
+    </section>
+
     <section id="view-browse" hidden>
       <div class="browse-toolbar">
         <div class="micro-label" id="browse-count"></div>
@@ -256,11 +261,20 @@ back: 智能体接收查询。</pre>
     </form>
   </dialog>
 
+  <dialog id="article-action-dialog" class="article-action-dialog" aria-label="阅读操作">
+    <div id="article-action-content"></div>
+    <div class="article-sheet-close-row">
+      <button type="button" class="btn" id="article-action-close">关闭</button>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <script src="logic.js" defer></script>
   <script src="store.js" defer></script>
   <script src="audio-cache.js" defer></script>
   <script src="batch-import.js" defer></script>
+  <script src="article-utils.js" defer></script>
+  <script src="article-store.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

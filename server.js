@@ -10,6 +10,7 @@ const seed = require('./seed.js');
 
 const PORT = 5902;
 const DATA_FILE = path.join(__dirname, 'flashdesk-data.json');
+const ARTICLE_FILE = path.join(__dirname, 'flashdesk-articles.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const LOG_FILE = path.join(os.homedir(), 'drills', 'log.txt');
 
@@ -134,6 +135,51 @@ function loadData() {
   }
 }
 
+function loadArticles() {
+  if (!fs.existsSync(ARTICLE_FILE)) return { articles: [], unknownWords: [] };
+  const parsed = JSON.parse(fs.readFileSync(ARTICLE_FILE, 'utf8'));
+  if (!parsed || !Array.isArray(parsed.articles)) throw new Error('article data file is invalid');
+  return { ...parsed, unknownWords: normalizeUnknownWords(parsed.unknownWords) };
+}
+
+function normalizeUnknownWords(words) {
+  return [...new Set((Array.isArray(words) ? words : [])
+    .map((word) => String(word || '').trim().toLowerCase()).filter(Boolean))];
+}
+
+function saveArticles(articleData) {
+  const temp = ARTICLE_FILE + '.tmp';
+  fs.writeFileSync(temp, JSON.stringify(articleData, null, 2));
+  fs.renameSync(temp, ARTICLE_FILE);
+}
+
+function makeArticleId() {
+  return 'a_' + Date.now() + '_' + Math.random().toString(16).slice(2, 8);
+}
+
+function normalizeArticleInput(input) {
+  const title = typeof input?.title === 'string' ? input.title.trim() : '';
+  const content = typeof input?.content === 'string' ? input.content.replace(/\r\n?/g, '\n').trim() : '';
+  const source = typeof input?.source === 'string' ? input.source.trim() : '';
+  const sourceUrl = typeof input?.sourceUrl === 'string' ? input.sourceUrl.trim() : '';
+  const publishedAt = typeof input?.publishedAt === 'string' ? input.publishedAt.trim() : '';
+  if (!title) throw new Error('文章标题不能为空');
+  if (!content) throw new Error('文章正文不能为空');
+  if (sourceUrl) {
+    let url;
+    try { url = new URL(sourceUrl); } catch { throw new Error('原文链接必须是有效的 http / https 地址'); }
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('原文链接必须是有效的 http / https 地址');
+  }
+  return { title, source, sourceUrl, publishedAt, content };
+}
+
+function normalizeArticleProgress(sentenceIndex, percent) {
+  return {
+    progressSentenceIndex: Number.isFinite(Number(sentenceIndex)) ? Math.max(0, Math.floor(Number(sentenceIndex))) : 0,
+    progressPercent: Number.isFinite(Number(percent)) ? Math.min(100, Math.max(0, Math.round(Number(percent)))) : 0,
+  };
+}
+
 const pad = (n) => String(n).padStart(2, '0');
 
 function localDate(d = new Date()) {
@@ -189,6 +235,72 @@ function readBody(req) {
 }
 
 async function handleApi(req, res, pathname) {
+  if (req.method === 'GET' && pathname === '/api/articles') {
+    return sendJSON(res, 200, { articles: loadArticles().articles });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/articles/profile') {
+    return sendJSON(res, 200, { unknownWords: loadArticles().unknownWords });
+  }
+
+  if (req.method === 'PATCH' && pathname === '/api/articles/profile/unknown-word') {
+    const body = await readBody(req);
+    const word = typeof body?.word === 'string' ? body.word.trim().toLowerCase() : '';
+    if (!word) return sendJSON(res, 400, { error: 'word is required' });
+    const articleData = loadArticles();
+    const words = new Set(articleData.unknownWords);
+    if (body?.unknown) words.add(word); else words.delete(word);
+    articleData.unknownWords = [...words];
+    saveArticles(articleData);
+    return sendJSON(res, 200, { unknownWords: articleData.unknownWords });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/articles') {
+    const body = await readBody(req);
+    let normalized;
+    try { normalized = normalizeArticleInput(body); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    const articleData = loadArticles();
+    const now = Date.now();
+    const article = {
+      id: makeArticleId(), ...normalized,
+      createdAt: now, updatedAt: now, lastReadAt: null,
+      progressSentenceIndex: 0, progressPercent: 0,
+    };
+    articleData.articles.push(article);
+    saveArticles(articleData);
+    return sendJSON(res, 201, { article });
+  }
+
+  const articleProgress = pathname.match(/^\/api\/articles\/([^/]+)\/progress$/);
+  if (req.method === 'PATCH' && articleProgress) {
+    const body = await readBody(req);
+    const articleData = loadArticles();
+    const article = articleData.articles.find((item) => item.id === articleProgress[1]);
+    if (!article) return sendJSON(res, 404, { error: 'article not found' });
+    const progress = normalizeArticleProgress(body?.progressSentenceIndex, body?.progressPercent);
+    const now = Date.now();
+    Object.assign(article, progress, { lastReadAt: now, updatedAt: now });
+    saveArticles(articleData);
+    return sendJSON(res, 200, { article });
+  }
+
+  const articleItem = pathname.match(/^\/api\/articles\/([^/]+)$/);
+  if (req.method === 'GET' && articleItem) {
+    const article = loadArticles().articles.find((item) => item.id === articleItem[1]);
+    if (!article) return sendJSON(res, 404, { error: 'article not found' });
+    return sendJSON(res, 200, { article });
+  }
+
+  if (req.method === 'DELETE' && articleItem) {
+    const articleData = loadArticles();
+    const index = articleData.articles.findIndex((item) => item.id === articleItem[1]);
+    if (index === -1) return sendJSON(res, 404, { error: 'article not found' });
+    articleData.articles.splice(index, 1);
+    saveArticles(articleData);
+    return sendJSON(res, 200, { ok: true });
+  }
+
   if (req.method === 'GET' && pathname === '/api/cards') {
     return sendJSON(res, 200, {
       cards: data.cards.map(wordDefaults), history: data.history,

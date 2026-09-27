@@ -17,6 +17,12 @@ const state = {
   },
   addMode: 'single',
   batchPreview: null,
+  articles: [],
+  article: {
+    mode: 'list', current: null, parsed: null, error: '',
+    cache: new Map(), observer: null, saveTimer: null, pendingProgress: null,
+    returnToId: null, unknownWords: new Set(),
+  },
 };
 
 function freshSession() {
@@ -1694,13 +1700,318 @@ function updateAddForm() {
   document.querySelectorAll('[data-word-field]').forEach((field) => { field.hidden = isSentence; });
 }
 
+/* ---------- articles ---------- */
+
+function articleWordVersion() {
+  return state.cards.filter((card) => card.deck === 'Words')
+    .map((card) => `${card.id}:${card.front}:${(card.forms || []).join(',')}`).join('|');
+}
+
+function articleMetrics(article) {
+  const unknownVersion = [...state.article.unknownWords].sort().join('|');
+  const cacheKey = `${article.updatedAt}:${article.content}:${articleWordVersion()}:${unknownVersion}`;
+  const cached = state.article.cache.get(article.id);
+  if (cached?.key === cacheKey) return cached.value;
+  const analysis = FlashArticleUtils.analyzeArticle(article.content);
+  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+  const coverage = FlashArticleUtils.articleCoverage(article.content, lookup);
+  const recognition = FlashArticleUtils.recognitionRate(article.content, state.article.unknownWords);
+  const value = { analysis, lookup, coverage, recognition };
+  state.article.cache.set(article.id, { key: cacheKey, value });
+  return value;
+}
+
+function articlePercent(value) {
+  return Number.isInteger(value) ? String(value) : Number(value).toFixed(1);
+}
+
+function articleIsMissing(error) {
+  return /(?:article\s+)?not found|文章不存在|已删除/i.test(String(error?.message || error || ''));
+}
+
+function articleDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('zh-CN');
+}
+
+function sortedArticles() {
+  return [...state.articles].sort((a, b) => {
+    const aRead = Number(a.lastReadAt) || 0;
+    const bRead = Number(b.lastReadAt) || 0;
+    if (aRead || bRead) return bRead - aRead || Number(b.createdAt) - Number(a.createdAt);
+    return Number(b.createdAt) - Number(a.createdAt);
+  });
+}
+
+function renderArticleHome() {
+  const root = $('#article-root');
+  if (state.article.error) {
+    root.innerHTML = `<div class="article-page-head"><div><h2>阅读</h2></div></div>
+      <div class="panel empty-panel"><p>无法加载文章：${esc(state.article.error)}</p></div>`;
+    return;
+  }
+  const cards = sortedArticles().map((article) => {
+    const { analysis, coverage, recognition } = articleMetrics(article);
+    const sourceLine = [article.source, articleDate(article.publishedAt)].filter(Boolean).join(' · ');
+    const progress = Math.min(100, Math.max(0, Number(article.progressPercent) || 0));
+    return `<article class="article-list-card">
+      <div class="article-card-main">
+        <h3>${esc(article.title)}</h3>
+        ${sourceLine ? `<div class="article-source">${esc(sourceLine)}</div>` : ''}
+        <div class="article-card-stats">
+          <span class="article-recognition-stat">当前认识率 ${articlePercent(recognition.percent)}%</span>
+          <span>${analysis.wordCount.toLocaleString()} words</span>
+          <span>FlashDesk 命中率 ${coverage.percent}%</span>
+          <span>阅读进度 ${progress}%</span>
+        </div>
+        <div class="article-recognition-note">基于你标记的不认识词</div>
+        <div class="article-progress"><span style="width:${progress}%"></span></div>
+      </div>
+      <div class="article-card-actions">
+        <button type="button" class="btn btn-primary" data-article-open="${esc(article.id)}">${progress ? '继续阅读' : '开始阅读'}</button>
+        <button type="button" class="btn btn-danger" data-article-delete="${esc(article.id)}">删除</button>
+      </div>
+    </article>`;
+  }).join('');
+  root.innerHTML = `<div class="article-page-head">
+      <div><h2>阅读</h2><p>${state.articles.length} 篇文章</p></div>
+      <button type="button" class="btn btn-primary" data-article-add>+ 添加文章</button>
+    </div>
+    <div class="article-list">${cards || '<div class="panel empty-panel"><p>还没有文章。可以粘贴一篇英文新闻或长文章开始阅读。</p></div>'}</div>`;
+}
+
+function renderArticleAdd() {
+  $('#article-root').innerHTML = `<div class="article-page-head">
+      <div><button type="button" class="article-back" data-article-list>← 返回</button><h2>添加文章</h2></div>
+    </div>
+    <form id="article-form" class="panel form-panel article-form">
+      <label class="field"><span class="micro-label">标题 *</span><input id="article-title" required></label>
+      <div class="article-form-grid">
+        <label class="field"><span class="micro-label">来源</span><input id="article-source" placeholder="例如：Reuters"></label>
+        <label class="field"><span class="micro-label">发布时间</span><input id="article-published" type="date"></label>
+      </div>
+      <label class="field"><span class="micro-label">原文链接</span><input id="article-source-url" type="url" inputmode="url" placeholder="https://..."></label>
+      <label class="field"><span class="micro-label">正文 *</span><textarea id="article-content" rows="18" required placeholder="粘贴纯英文文章正文；空行会保留为段落边界"></textarea></label>
+      <div id="article-form-stats" class="article-form-stats">0 words · 0 段</div>
+      <p id="article-long-note" class="pronunciation-note" hidden>文章较长，阅读页面可能需要更多加载时间。</p>
+      <div class="form-actions"><button type="submit" class="btn btn-primary" id="article-save">保存并阅读</button></div>
+      <p id="article-form-message" class="batch-import-message" role="status"></p>
+    </form>`;
+}
+
+function articleSentenceHtml(sentence, lookup) {
+  const tokens = FlashArticleUtils.wordTokens(sentence.text);
+  let html = '';
+  let position = 0;
+  for (const token of tokens) {
+    html += esc(sentence.text.slice(position, token.index));
+    const key = FlashArticleUtils.wordKey(token.text);
+    const learned = lookup.has(key);
+    const unknown = state.article.unknownWords.has(key);
+    html += `<span class="article-word${learned ? ' learned' : ''}${unknown ? ' unknown' : ''}" data-article-word="${esc(token.text)}" data-word-key="${esc(key)}">${esc(token.text)}</span>`;
+    position = token.index + token.text.length;
+  }
+  html += esc(sentence.text.slice(position));
+  return `<span class="article-sentence" data-sentence-index="${sentence.index}" data-sentence-text="${esc(sentence.text)}">${html}</span>`;
+}
+
+function renderArticleReader() {
+  const article = state.article.current;
+  if (!article) return renderArticleHome();
+  const metrics = articleMetrics(article);
+  state.article.parsed = metrics.analysis;
+  const sourceLine = [article.source, articleDate(article.publishedAt)].filter(Boolean).join(' · ');
+  const progress = Math.min(100, Math.max(0, Number(article.progressPercent) || 0));
+  const paragraphs = metrics.analysis.paragraphs.map((paragraph) => `<p>${paragraph.sentences
+    .map((sentence) => articleSentenceHtml(sentence, metrics.lookup)).join(' ')}</p>`).join('');
+  $('#article-root').innerHTML = `<article class="article-reader">
+    <header class="article-reader-head">
+      <button type="button" class="article-back" data-article-list>← 返回</button>
+      <h2>${esc(article.title)}</h2>
+      ${sourceLine ? `<div class="article-source">${esc(sourceLine)}</div>` : ''}
+      <div class="article-reader-meta">
+        <span class="article-recognition-stat">当前认识率 <strong id="article-recognition-rate">${articlePercent(metrics.recognition.percent)}%</strong></span>
+        <span>${metrics.analysis.wordCount.toLocaleString()} words</span>
+        <span>FlashDesk 命中率 <span id="article-hit-rate">${metrics.coverage.percent}%</span></span>
+        ${article.sourceUrl ? `<a href="${esc(article.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开原文</a>` : ''}
+      </div>
+      <div class="article-recognition-note">基于你标记的不认识词</div>
+      <div class="article-reader-progress"><span>阅读进度 <strong id="article-progress-label">${progress}%</strong></span>
+        <div class="article-progress"><span id="article-progress-bar" style="width:${progress}%"></span></div></div>
+    </header>
+    <div class="article-body">${paragraphs}</div>
+  </article>`;
+  startArticleProgressTracking();
+  const resume = Math.max(0, Number(article.progressSentenceIndex) || 0);
+  requestAnimationFrame(() => document.querySelector(`[data-sentence-index="${resume}"]`)?.scrollIntoView({ block: 'center' }));
+}
+
+function renderArticleView() {
+  if (state.article.mode === 'add') renderArticleAdd();
+  else if (state.article.mode === 'reader') renderArticleReader();
+  else renderArticleHome();
+}
+
+async function openArticle(id) {
+  try {
+    const article = await ArticleStore.get(id);
+    const index = state.articles.findIndex((item) => item.id === article.id);
+    if (index === -1) state.articles.push(article); else state.articles[index] = article;
+    state.article.current = article;
+    state.article.mode = 'reader';
+    if (state.view !== 'reading') switchView('reading'); else renderArticleReader();
+  } catch (err) {
+    if (articleIsMissing(err)) {
+      state.articles = state.articles.filter((item) => item.id !== id);
+      state.article.cache.delete(id);
+      state.article.current = null;
+      state.article.mode = 'list';
+      state.article.error = '';
+      if (state.article.returnToId === id) state.article.returnToId = null;
+      if (state.view !== 'reading') switchView('reading'); else renderArticleHome();
+      toast('文章不存在或已删除');
+      return;
+    }
+    toast(`无法打开文章：${err.message}`);
+  }
+}
+
+function stopArticleProgressTracking() {
+  state.article.observer?.disconnect();
+  state.article.observer = null;
+}
+
+async function saveArticleProgress(progress) {
+  const article = state.article.current;
+  if (!article || !progress) return;
+  try {
+    const updated = await ArticleStore.updateProgress(article.id, progress);
+    state.article.current = updated;
+    const index = state.articles.findIndex((item) => item.id === updated.id);
+    if (index !== -1) state.articles[index] = updated;
+  } catch (err) {
+    toast(`阅读进度保存失败：${err.message}`);
+  }
+}
+
+function flushArticleProgress() {
+  if (state.article.saveTimer) clearTimeout(state.article.saveTimer);
+  state.article.saveTimer = null;
+  const progress = state.article.pendingProgress;
+  state.article.pendingProgress = null;
+  if (progress) saveArticleProgress(progress);
+}
+
+function queueArticleProgress(sentenceIndex, sentenceCount) {
+  const percent = sentenceCount ? Math.min(100, Math.round(((sentenceIndex + 1) / sentenceCount) * 100)) : 0;
+  state.article.pendingProgress = { progressSentenceIndex: sentenceIndex, progressPercent: percent };
+  const label = $('#article-progress-label');
+  const bar = $('#article-progress-bar');
+  if (label) label.textContent = `${percent}%`;
+  if (bar) bar.style.width = `${percent}%`;
+  if (!state.article.saveTimer) state.article.saveTimer = setTimeout(flushArticleProgress, 1500);
+}
+
+function startArticleProgressTracking() {
+  stopArticleProgressTracking();
+  const sentenceCount = state.article.parsed?.sentenceCount || 0;
+  if (!sentenceCount || typeof IntersectionObserver === 'undefined') return;
+  state.article.observer = new IntersectionObserver((entries) => {
+    const visible = entries.filter((entry) => entry.isIntersecting)
+      .map((entry) => Number(entry.target.dataset.sentenceIndex)).filter(Number.isFinite);
+    if (visible.length) queueArticleProgress(Math.max(...visible), sentenceCount);
+  }, { rootMargin: '-15% 0px -45% 0px', threshold: 0.25 });
+  document.querySelectorAll('.article-sentence').forEach((sentence) => state.article.observer.observe(sentence));
+}
+
+function openArticleWord(word) {
+  const key = FlashArticleUtils.wordKey(word);
+  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+  const card = lookup.get(key);
+  const unknown = state.article.unknownWords.has(key);
+  const details = card ? wordDetails(card) : null;
+  $('#article-action-content').innerHTML = `<div class="article-sheet">
+    <div class="micro-label">英文单词</div><h3>${esc(word)}</h3>
+    ${card ? `<p class="article-learned-label">已学习：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
+      <div class="word-detail-meaning">${esc(card.back)}</div>
+      ${details.memoryReading ? `<div class="word-detail"><span class="micro-label">🧠 发音拆解</span><div>${esc(details.memoryReading)}</div></div>` : ''}
+      ${details.chineseReading ? `<div class="word-detail"><span class="micro-label">🗣 中文近似</span><div>${esc(details.chineseReading)}</div></div>` : ''}`
+      : '<p class="muted">未加入单词库</p>'}
+    ${unknown ? '<p class="article-unknown-label">不认识</p>' : ''}
+    <div class="article-sheet-actions">
+      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
+      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
+      ${unknown
+        ? `<button type="button" class="btn" data-article-known="${esc(word)}">我现在认识了</button>`
+        : `<button type="button" class="btn" data-article-unknown="${esc(word)}">标记不认识</button>`}
+      ${card ? '' : `<button type="button" class="btn btn-primary" data-article-add-word="${esc(word)}">加入单词库</button>`}
+    </div></div>`;
+  const dialog = $('#article-action-dialog');
+  if (!dialog.open) dialog.showModal();
+}
+
+async function setArticleUnknown(word, unknown) {
+  try {
+    const words = await ArticleStore.setUnknownWord(word, unknown);
+    state.article.unknownWords = new Set(FlashArticleUtils.normalizeUnknownWords(words));
+    state.article.cache.clear();
+    const article = state.article.current;
+    if (article) {
+      const metrics = articleMetrics(article);
+      const recognition = $('#article-recognition-rate');
+      if (recognition) recognition.textContent = `${articlePercent(metrics.recognition.percent)}%`;
+      document.querySelectorAll('.article-word[data-word-key]').forEach((element) => {
+        element.classList.toggle('unknown', state.article.unknownWords.has(element.dataset.wordKey));
+      });
+    }
+    openArticleWord(word);
+  } catch (err) {
+    toast(`阅读词汇状态保存失败：${err.message}`);
+  }
+}
+
+function openArticleSentence(text) {
+  const saved = FlashArticleUtils.sentenceExists(state.cards, text);
+  $('#article-action-content').innerHTML = `<div class="article-sheet">
+    <div class="micro-label">完整句子</div><p class="article-sheet-sentence">${esc(text)}</p>
+    ${saved ? '<p class="article-learned-label">已保存到长句库</p>' : ''}
+    <div class="article-sheet-actions">
+      <button type="button" class="btn" data-article-speak="${esc(text)}" data-rate="1">🔊 正常发音</button>
+      <button type="button" class="btn" data-article-speak="${esc(text)}" data-rate="0.75">🐢 慢速发音</button>
+      ${saved ? '' : `<button type="button" class="btn btn-primary" data-article-add-sentence="${esc(text)}">保存为长句</button>`}
+    </div></div>`;
+  $('#article-action-dialog').showModal();
+}
+
+function prefillArticleCard(deck, front) {
+  $('#article-action-dialog').close();
+  state.article.returnToId = state.article.current?.id || null;
+  switchView('add');
+  setAddMode('single');
+  $('#add-type').value = deck;
+  updateAddForm();
+  $('#add-front').value = front;
+  $('#add-back').value = '';
+  $('#add-memory-reading').value = '';
+  $('#add-chinese-reading').value = '';
+  $('#add-forms').value = '';
+  $('#add-back').focus();
+}
+
 /* ---------- views ---------- */
 
 function switchView(name) {
   stopEnglishPlayback();
+  if (state.view === 'reading' && name !== 'reading') {
+    stopArticleProgressTracking();
+    flushArticleProgress();
+  }
   state.view = name;
+  document.body.classList.toggle('reading-view', name === 'reading');
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('btn-active', b.dataset.view === name));
-  for (const v of ['review', 'quiz', 'add', 'words', 'browse']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'browse']) $(`#view-${v}`).hidden = v !== name;
   if (name === 'review') {
     state.session = freshSession();
     buildQueue();
@@ -1713,6 +2024,8 @@ function switchView(name) {
     if (FlashStore.exportData) $('#data-panel').hidden = false;
   } else if (name === 'words') {
     renderWordLibrary();
+  } else if (name === 'reading') {
+    renderArticleView();
   } else if (name === 'add') {
     updateAddForm();
     setAddMode(state.addMode);
@@ -1725,6 +2038,7 @@ function bindEvents() {
   document.querySelectorAll('.tab').forEach((b) =>
     b.addEventListener('click', () => {
       if (b.dataset.view === 'words') state.wordLibrary.selectedId = null;
+      if (b.dataset.view === 'reading') state.article.mode = 'list';
       switchView(b.dataset.view);
     }));
 
@@ -1894,6 +2208,94 @@ function bindEvents() {
     }
   });
 
+  $('#article-root').addEventListener('input', (e) => {
+    if (e.target.id !== 'article-content') return;
+    const analysis = FlashArticleUtils.analyzeArticle(e.target.value);
+    $('#article-form-stats').textContent = `${analysis.wordCount.toLocaleString()} words · ${analysis.paragraphs.length} 段`;
+    $('#article-long-note').hidden = analysis.wordCount <= 20000;
+  });
+
+  $('#article-root').addEventListener('submit', async (e) => {
+    if (e.target.id !== 'article-form') return;
+    e.preventDefault();
+    const save = $('#article-save');
+    if (save.disabled) return;
+    save.disabled = true;
+    $('#article-form-message').textContent = '正在保存…';
+    try {
+      const article = await ArticleStore.create({
+        title: $('#article-title').value,
+        source: $('#article-source').value,
+        sourceUrl: $('#article-source-url').value,
+        publishedAt: $('#article-published').value,
+        content: $('#article-content').value,
+      });
+      state.articles.push(article);
+      state.article.cache.delete(article.id);
+      await openArticle(article.id);
+    } catch (err) {
+      $('#article-form-message').textContent = `保存失败：${err.message}`;
+      save.disabled = false;
+    }
+  });
+
+  $('#article-root').addEventListener('click', async (e) => {
+    const word = e.target.closest('[data-article-word]');
+    if (word) {
+      e.preventDefault();
+      e.stopPropagation();
+      openArticleWord(word.dataset.articleWord);
+      return;
+    }
+    const sentence = e.target.closest('[data-sentence-index]');
+    if (sentence) {
+      openArticleSentence(sentence.dataset.sentenceText);
+      return;
+    }
+    const button = e.target.closest('button');
+    if (!button) return;
+    if (button.hasAttribute('data-article-add')) {
+      state.article.mode = 'add';
+      renderArticleAdd();
+    } else if (button.hasAttribute('data-article-list')) {
+      stopArticleProgressTracking();
+      flushArticleProgress();
+      state.article.mode = 'list';
+      state.article.current = null;
+      renderArticleHome();
+    } else if (button.dataset.articleOpen) {
+      await openArticle(button.dataset.articleOpen);
+    } else if (button.dataset.articleDelete) {
+      const article = state.articles.find((item) => item.id === button.dataset.articleDelete);
+      if (!article || !confirm('确定删除这篇文章？')) return;
+      try {
+        await ArticleStore.delete(article.id);
+        state.articles = state.articles.filter((item) => item.id !== article.id);
+        state.article.cache.delete(article.id);
+        renderArticleHome();
+      } catch (err) {
+        toast(`删除失败：${err.message}`);
+      }
+    }
+  });
+
+  $('#article-action-close').addEventListener('click', () => $('#article-action-dialog').close());
+  $('#article-action-content').addEventListener('click', async (e) => {
+    const button = e.target.closest('button');
+    if (!button) return;
+    if (button.dataset.articleSpeak !== undefined) {
+      playEnglish(button.dataset.articleSpeak, { rate: Number(button.dataset.rate) || 1, button });
+    } else if (button.dataset.articleUnknown !== undefined) {
+      await setArticleUnknown(button.dataset.articleUnknown, true);
+    } else if (button.dataset.articleKnown !== undefined) {
+      await setArticleUnknown(button.dataset.articleKnown, false);
+    } else if (button.dataset.articleAddWord !== undefined) {
+      prefillArticleCard('Words', button.dataset.articleAddWord);
+    } else if (button.dataset.articleAddSentence !== undefined) {
+      prefillArticleCard('Sentences', button.dataset.articleAddSentence);
+    }
+  });
+
   $('#add-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const front = $('#add-front').value.trim();
@@ -1918,6 +2320,7 @@ function bindEvents() {
           card.wordNumber + 1,
         ) };
       }
+      state.article.cache.clear();
       renderDeckControls();
       $('#add-front').value = '';
       $('#add-back').value = '';
@@ -1931,6 +2334,11 @@ function bindEvents() {
       clearTimeout(flash._t);
       flash._t = setTimeout(() => { flash.hidden = true; }, 1800);
       $('#add-front').focus();
+      const returnToArticle = state.article.returnToId;
+      if (returnToArticle) {
+        state.article.returnToId = null;
+        await openArticle(returnToArticle);
+      }
     } catch (err) {
       toast(`添加失败： ${err.message}`);
     } finally {
@@ -2015,6 +2423,7 @@ function bindEvents() {
       const { card } = await FlashStore.updateCard(id, fields);
       const index = state.cards.findIndex((c) => c.id === card.id);
       if (index !== -1) state.cards[index] = card;
+      state.article.cache.clear();
       if (form.dataset.returnView === 'words') renderWordLibrary();
       else renderBrowse();
       // A body-level toast would be behind the modal; restore it before closing.
@@ -2029,6 +2438,8 @@ function bindEvents() {
       $('#edit-cancel').disabled = false;
     }
   });
+
+  window.addEventListener('pagehide', flushArticleProgress);
 
   $('#copy-stats-browse').addEventListener('click', (e) =>
     copyStats(e.target, $('#stats-fallback')));
@@ -2082,6 +2493,19 @@ async function init() {
     $('#review-area').innerHTML = `<div class="panel empty-panel"><p>无法加载卡片： ${esc(err.message)}</p></div>`;
     $('#view-review').hidden = false;
     return;
+  }
+  try {
+    state.articles = await ArticleStore.list();
+  } catch (err) {
+    state.article.error = err.message;
+  }
+  try {
+    const unknownWords = await ArticleStore.getUnknownWords();
+    state.article.unknownWords = new Set(FlashArticleUtils.normalizeUnknownWords(unknownWords));
+  } catch {
+    // Reading remains usable when an older running Node process has not yet
+    // picked up the optional profile route. A restart restores persistence.
+    state.article.unknownWords = new Set();
   }
   await refreshAudioCacheStats();
   renderDeckControls();
