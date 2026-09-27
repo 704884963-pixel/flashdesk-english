@@ -1,11 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard } = require('../public/logic.js');
+const { reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard } = require('../public/logic.js');
 
 const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, deck });
 
-// A reversed pair used throughout: 'a' has the short (keyword) front,
-// 'b' the long (description) front.
 const pairA = () => card('a', 'Transparency', 'Understand how the system works', 0);
 const pairB = () => card('b', 'Understand how the system works', 'Transparency', 0);
 
@@ -16,60 +14,38 @@ test('current weak status requires historical lapses and a zero streak', () => {
   assert.equal(isWeakCard({ lapses: 0, streak: 0 }), false);
 });
 
-test('buildTwinMap pairs reversed cards in the same deck', () => {
-  const single = card('c', 'Fairness', 'No bias across groups');
-  const twins = buildTwinMap([pairA(), pairB(), single]);
-  assert.equal(twins.get('a'), 'b');
-  assert.equal(twins.get('b'), 'a');
-  assert.equal(twins.has('c'), false);
+test('reviewQueue keeps both due reversed cards as independent entities', () => {
+  assert.deepEqual(reviewQueue([pairA(), pairB()], 1), ['a', 'b']);
 });
 
-test('buildTwinMap ignores would-be twins in another deck', () => {
-  const a = card('a', 'X', 'Y', 0, 'D1');
-  const b = card('b', 'Y', 'X', 0, 'D2');
-  assert.equal(buildTwinMap([a, b]).size, 0);
-});
-
-test('buildTwinMap matching is trim- and case-insensitive', () => {
-  const a = card('a', ' Transparency ', 'DEF');
-  const b = card('b', 'def', 'transparency');
-  assert.equal(buildTwinMap([a, b]).get('a'), 'b');
-});
-
-test('reviewQueue collapses a due pair to one keyword-first entry', () => {
-  assert.deepEqual(reviewQueue([pairA(), pairB()], 1, 'keyword', {}), ['a']);
-});
-
-test('reviewQueue description mode queues the long-front twin', () => {
-  assert.deepEqual(reviewQueue([pairA(), pairB()], 1, 'description', {}), ['b']);
-});
-
-test('a pair is due when either twin is due', () => {
+test('reviewQueue includes only the reversed card that is actually due', () => {
   const a = card('a', 'Transparency', 'Understand how the system works', 999);
   const b = card('b', 'Understand how the system works', 'Transparency', 0);
-  assert.deepEqual(reviewQueue([a, b], 1, 'keyword', {}), ['a']);
+  assert.deepEqual(reviewQueue([a, b], 1), ['b']);
 });
 
-test('mixed mode memoizes its pick across rebuilds', () => {
-  const picks = {};
-  const first = reviewQueue([pairA(), pairB()], 1, 'mixed', picks);
-  assert.equal(first.length, 1);
-  for (let i = 0; i < 5; i += 1) {
-    assert.deepEqual(reviewQueue([pairA(), pairB()], 1, 'mixed', picks), first);
-  }
-});
-
-test('singles keep their authored direction; non-due cards stay out', () => {
+test('Word and Sentence cards keep their authored direction and non-due cards stay out', () => {
   const scenario = card('s', 'A long scenario about predicting chicken demand', 'Regression', 0);
+  const sentence = card('sentence', 'A complete sentence.', '一个完整句子。', 0, 'Sentences');
   const notDue = card('n', 'Not due yet', 'Nope', 99);
-  assert.deepEqual(reviewQueue([scenario, notDue], 1, 'description', {}), ['s']);
+  assert.deepEqual(reviewQueue([scenario, sentence, notDue], 1), ['s', 'sentence']);
 });
 
-test('queue sorts by earliest due (pair uses its earlier twin)', () => {
+test('queue sorts every due entity by its own due time', () => {
   const early = card('e', 'Early single', 'Def', 5);
   const a = card('a', 'Transparency', 'Understand how the system works', 40);
   const b = card('b', 'Understand how the system works', 'Transparency', 10);
-  assert.deepEqual(reviewQueue([a, early, b], 50, 'keyword', {}), ['e', 'a']);
+  assert.deepEqual(reviewQueue([a, early, b], 50), ['e', 'b', 'a']);
+});
+
+test('99 due entities remain 99 queue items even with nine reversed pairs', () => {
+  const cards = [];
+  for (let i = 0; i < 9; i += 1) {
+    cards.push(card(`a${i}`, `term ${i}`, `definition ${i}`, i));
+    cards.push(card(`b${i}`, `definition ${i}`, `term ${i}`, i));
+  }
+  for (let i = 18; i < 99; i += 1) cards.push(card(`c${i}`, `term ${i}`, `definition ${i}`, i));
+  assert.equal(reviewQueue(cards, 100).length, 99);
 });
 
 const stemming = {

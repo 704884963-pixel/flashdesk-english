@@ -56,7 +56,6 @@ state.direction = (() => {
     return DIRECTIONS.includes(d) ? d : 'mixed';
   } catch { return 'mixed'; }
 })();
-state.twinMap = new Map();
 
 /* ---------- helpers ---------- */
 
@@ -880,17 +879,9 @@ function renderDeckControls() {
 function buildQueue() {
   const s = state.session;
   const pool = state.cards.filter(inFilter);
-  state.twinMap = FlashLogic.buildTwinMap(pool);
-  s.queue = FlashLogic.reviewQueue(pool, Date.now(), state.direction, s.picks);
+  s.queue = FlashLogic.reviewQueue(pool, Date.now());
   if (s.pos >= s.queue.length) s.pos = 0;
-  renderDirSwitch();
-}
-
-function renderDirSwitch() {
-  const el = $('#dir-switch');
-  el.hidden = state.twinMap.size === 0; // nothing to switch without pairs
-  el.querySelectorAll('.dir-opt').forEach((b) =>
-    b.classList.toggle('active', b.dataset.dir === state.direction));
+  $('#dir-switch').hidden = true;
 }
 
 function stepCard(dir) {
@@ -1031,20 +1022,6 @@ async function grade(kind) {
   s.gradedIds.add(id);
   const idx = state.cards.findIndex((c) => c.id === id);
   if (idx !== -1) state.cards[idx] = card;
-
-  // The queue collapsed this card's reversed twin into this review — grade it
-  // identically so the same fact never comes due twice.
-  const twinId = state.twinMap.get(id);
-  if (twinId && state.cards.some((c) => c.id === twinId)) {
-    try {
-      const { card: twinCard } = await FlashStore.gradeCard(twinId, kind);
-      const tIdx = state.cards.findIndex((c) => c.id === twinId);
-      if (tIdx !== -1) state.cards[tIdx] = twinCard;
-    } catch (err) {
-      // Not fatal: the twin keeps its old schedule and surfaces next session.
-      toast(`关联卡片保存失败： ${err.message}`);
-    }
-  }
 
   s.revealed = false;
   buildQueue();

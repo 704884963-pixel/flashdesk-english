@@ -1,59 +1,15 @@
-// FlashDesk shared pure logic — reversed-pair detection, review-queue
-// collapse, and quiz-distractor similarity. Plain script: attaches
+// FlashDesk shared pure logic — review queues and quiz-distractor similarity. Plain script: attaches
 // window.FlashLogic in the browser, module.exports under node --test.
 
 (() => {
   const norm = (s) => String(s).trim().toLowerCase();
-  // JSON-array key: unambiguous regardless of characters in card text.
-  const key = (deck, a, b) => JSON.stringify([deck, norm(a), norm(b)]);
-
-  // cardId -> twinId for reversed pairs: A.front==B.back && A.back==B.front
-  // (trim/case-insensitive), same deck.
-  function buildTwinMap(cards) {
-    const byKey = new Map();
-    for (const c of cards) byKey.set(key(c.deck, c.front, c.back), c.id);
-    const twins = new Map();
-    for (const c of cards) {
-      const twinId = byKey.get(key(c.deck, c.back, c.front));
-      if (twinId && twinId !== c.id) twins.set(c.id, twinId);
-    }
-    return twins;
-  }
-
-  // Due card ids with reversed pairs collapsed to one entry, sorted by due.
-  // direction: 'keyword' -> the twin with the shorter front shows,
-  // 'description' -> the longer front, 'mixed' -> random per pair, memoized
-  // in `picks` (caller-owned, mutated) so a session stays stable.
-  // A pair is due when EITHER twin is due; it sorts by the earlier due.
-  function reviewQueue(cards, now, direction, picks) {
-    const twins = buildTwinMap(cards);
-    const byId = new Map(cards.map((c) => [c.id, c]));
-    const seen = new Set();
-    const entries = [];
-    for (const c of cards) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      const twin = byId.get(twins.get(c.id));
-      if (!twin) {
-        if (c.due <= now) entries.push({ id: c.id, due: c.due });
-        continue;
-      }
-      seen.add(twin.id);
-      const due = Math.min(c.due, twin.due);
-      if (due > now) continue;
-      let rep;
-      if (direction === 'keyword') {
-        rep = c.front.length <= twin.front.length ? c : twin;
-      } else if (direction === 'description') {
-        rep = c.front.length <= twin.front.length ? twin : c;
-      } else {
-        const pairKey = [c.id, twin.id].sort().join('|');
-        if (!picks[pairKey]) picks[pairKey] = Math.random() < 0.5 ? c.id : twin.id;
-        rep = byId.get(picks[pairKey]);
-      }
-      entries.push({ id: rep.id, due });
-    }
-    return entries.sort((x, y) => x.due - y.due).map((e) => e.id);
+  // Every due entity is an independent review item. Cards whose front/back are
+  // reversed are still separate cards and must each be shown and graded.
+  function reviewQueue(cards, now) {
+    return cards
+      .filter((card) => Number(card.due) <= now)
+      .sort((a, b) => Number(a.due) - Number(b.due))
+      .map((card) => card.id);
   }
 
   const STOP = new Set([
@@ -311,7 +267,7 @@
   }
 
   const FlashLogic = {
-    buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices,
+    reviewQueue, similarity, rankDistractors, buildChoices,
     WORD_QUIZ_TYPES, isWeakCard, wordQuizPool, wordQuizWeight, selectWordQuizCards,
     buildWordQuizChoices, buildWordQuizQuestion, mixedWordQuizTypes,
     alternateWordQuizType, insertWordQuizRetry, wordQuizResult,
