@@ -12,6 +12,7 @@ const ASSETS = [
   'batch-import.js',
   'article-utils.js',
   'article-store.js',
+  'ai-learning.js',
   'logic.js',
   'store.js',
   'default-data.json',

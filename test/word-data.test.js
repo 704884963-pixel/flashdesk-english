@@ -6,6 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const vm = require('node:vm');
 const { once } = require('node:events');
+const FlashLogic = require('../public/logic.js');
 
 const source = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -203,6 +204,17 @@ for (const mode of ['Node', 'PWA']) {
     const { card } = await h.store.addCard({ ...word(), forms: ['expected'], memoryReading: 'hint', chineseReading: '读法' });
     const result = await h.store.updateCard(card.id, { front: 'changed', back: '修改', wordNumber: 999 });
     assert.deepEqual(plain(result.card), { ...plain(card), front: 'changed', back: '修改' });
+  });
+  test(`${mode}: a correct review resolves current weakness without clearing lapse history`, async (t) => {
+    const h = await harness(t, mode);
+    const { card } = await h.store.addCard(word('recover'));
+    const afterAgain = (await h.store.gradeCard(card.id, 'again')).card;
+    assert.equal(FlashLogic.isWeakCard(afterAgain), true);
+    assert.equal(afterAgain.lapses, 1);
+    const afterGot = (await h.store.gradeCard(card.id, 'got')).card;
+    assert.equal(FlashLogic.isWeakCard(afterGot), false);
+    assert.equal(afterGot.streak, 1);
+    assert.equal(afterGot.lapses, 1);
   });
 }
 

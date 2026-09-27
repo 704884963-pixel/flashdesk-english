@@ -26,6 +26,7 @@
         <button class="btn tab" data-view="add">新增</button>
         <button class="btn tab" data-view="words">单词库</button>
         <button class="btn tab" data-view="reading">阅读</button>
+        <button class="btn tab" data-view="ai">AI学习</button>
         <button class="btn tab" data-view="browse">浏览</button>
         <label class="deck-filter">
           <span class="micro-label">分类</span>
@@ -198,6 +199,10 @@ back: 智能体接收查询。</pre>
       <div id="article-root"></div>
     </section>
 
+    <section id="view-ai" hidden>
+      <div id="ai-root"></div>
+    </section>
+
     <section id="view-browse" hidden>
       <div class="browse-toolbar">
         <div class="micro-label" id="browse-count"></div>
@@ -281,6 +286,7 @@ back: 智能体接收查询。</pre>
   <script src="batch-import.js" defer></script>
   <script src="article-utils.js" defer></script>
   <script src="article-store.js" defer></script>
+  <script src="ai-learning.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

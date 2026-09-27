@@ -1,0 +1,7 @@
+{
+  "name": "flashdesk-ai-worker",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test ../../test/ai-worker.test.js" },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

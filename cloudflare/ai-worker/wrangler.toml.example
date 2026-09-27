@@ -1,0 +1,9 @@
+name = "flashdesk-ai"
+main = "src/index.js"
+compatibility_date = "2026-09-27"
+
+[vars]
+AI_PROVIDER = "zhipu"
+AI_MODEL = "glm-4.5-air"
+# ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+# FLASHDESK_ALLOWED_ORIGIN = "https://your-user.github.io"

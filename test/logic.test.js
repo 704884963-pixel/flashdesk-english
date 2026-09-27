@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices } = require('../public/logic.js');
+const { buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard } = require('../public/logic.js');
 
 const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, deck });
 
@@ -8,6 +8,13 @@ const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, 
 // 'b' the long (description) front.
 const pairA = () => card('a', 'Transparency', 'Understand how the system works', 0);
 const pairB = () => card('b', 'Understand how the system works', 'Transparency', 0);
+
+test('current weak status requires historical lapses and a zero streak', () => {
+  assert.equal(isWeakCard({ lapses: 1, streak: 0 }), true);
+  assert.equal(isWeakCard({ lapses: 1, streak: 1 }), false);
+  assert.equal(isWeakCard({ lapses: 3, streak: 2 }), false);
+  assert.equal(isWeakCard({ lapses: 0, streak: 0 }), false);
+});
 
 test('buildTwinMap pairs reversed cards in the same deck', () => {
   const single = card('c', 'Fairness', 'No bias across groups');

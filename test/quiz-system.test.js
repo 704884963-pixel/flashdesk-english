@@ -8,11 +8,11 @@ const FlashLogic = require('../public/logic.js');
 const now = 2_000_000;
 const words = [
   { id: 'strategy', deck: 'Words', wordNumber: 10, front: 'strategy', back: '策略；战略', due: now + 9, streak: 2, lapses: 0, created: 10, memoryReading: 'stra + te + gy', chineseReading: '斯特拉-特-吉' },
-  { id: 'approach', deck: 'Words', wordNumber: 11, front: 'approach', back: '方法；方式', due: now - 1, streak: 1, lapses: 0, created: 11 },
+  { id: 'approach', deck: 'Words', wordNumber: 11, front: 'approach', back: '方法；方式', due: now - 1, streak: 1, lapses: 1, created: 11 },
   { id: 'confidence', deck: 'Words', wordNumber: 12, front: 'confidence', back: '置信度；信心', due: now + 9, streak: 3, lapses: 0, created: 12 },
   { id: 'evidence', deck: 'Words', wordNumber: 13, front: 'evidence', back: '证据', due: now + 9, streak: 1, lapses: 0, created: 13 },
   { id: 'strict', deck: 'Words', wordNumber: 14, front: 'strict', back: '严格的', due: now + 9, streak: 0, lapses: 0, created: 14 },
-  { id: 'state', deck: 'Words', wordNumber: 15, front: 'state', back: '状态', due: now + 9, streak: 1, lapses: 4, created: 15 },
+  { id: 'state', deck: 'Words', wordNumber: 15, front: 'state', back: '状态', due: now + 9, streak: 0, lapses: 4, created: 15 },
   { id: 'summary', deck: 'Words', wordNumber: 16, front: 'summary', back: '总结', due: now + 9, streak: 1, lapses: 0, created: 16 },
   { id: 'workflow', deck: 'Words', wordNumber: 17, front: 'workflow', back: '工作流', due: now + 9, streak: 1, lapses: 0, created: 17 },
   { id: 'sentence', deck: 'Sentences', front: 'Use a strategy.', back: '使用策略。', due: 0, streak: 0, lapses: 0, created: 18 },
@@ -43,6 +43,12 @@ test('Sentences never enter the Word detection pool', () => {
 test('智能混合 gives 易错词 the highest weight', () => {
   const weights = Object.fromEntries(words.slice(0, 6).map((card) => [card.id, FlashLogic.wordQuizWeight(card, 'smart', now)]));
   assert.ok(weights.state > weights.strict);
+});
+
+test('recovered historical lapse returns to due priority instead of weak priority', () => {
+  assert.equal(FlashLogic.isWeakCard(words[1]), false);
+  assert.ok(FlashLogic.wordQuizWeight(words[4], 'smart', now) > FlashLogic.wordQuizWeight(words[1], 'smart', now));
+  assert.ok(FlashLogic.wordQuizWeight(words[5], 'lapsed', now) > FlashLogic.wordQuizWeight(words[1], 'lapsed', now));
 });
 
 test('智能混合 gives 新词 more weight than due and ordinary words', () => {

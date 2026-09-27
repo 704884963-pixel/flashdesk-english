@@ -3,10 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const FlashLogic = require('../public/logic.js');
 
 function client(cards) {
   const nodes = new Map();
   const context = vm.createContext({
+    FlashLogic,
     localStorage: { getItem: () => null },
     document: { querySelector(selector) {
       if (!nodes.has(selector)) nodes.set(selector, {});

@@ -5,5 +5,9 @@ cloudflare/tts-worker/node_modules/
 cloudflare/tts-worker/.wrangler/
 cloudflare/tts-worker/.dev.vars*
 cloudflare/tts-worker/.env*
+cloudflare/ai-worker/node_modules/
+cloudflare/ai-worker/.wrangler/
+cloudflare/ai-worker/.dev.vars*
+cloudflare/ai-worker/.env*
 *.corrupt-*.json
 .DS_Store

@@ -23,6 +23,11 @@ const state = {
     cache: new Map(), observer: null, saveTimer: null, pendingProgress: null,
     returnToId: null, unknownWords: new Set(),
   },
+  ai: {
+    mode: 'home', loading: false, error: '', preview: null, targets: [],
+    revealed: new Set(), service: null, topic: 'auto', difficulty: 'medium',
+    lookupCache: new Map(),
+  },
 };
 
 function freshSession() {
@@ -72,6 +77,35 @@ function wordDetails(card) {
 
 function parseForms(text) {
   return [...new Set(text.split(/[,，\r\n]+/).map((form) => form.trim()).filter(Boolean))];
+}
+
+function newCardFields({ deck, front, back, memoryReading = '', chineseReading = '', formsText = '' }) {
+  const fields = {
+    deck: String(deck || '').trim(),
+    front: String(front || '').trim(),
+    back: String(back || '').trim(),
+  };
+  if (!fields.deck || !fields.front || !fields.back) throw new Error('英文和中文内容不能为空');
+  if (fields.deck === 'Words') {
+    fields.memoryReading = String(memoryReading || '').trim();
+    fields.chineseReading = String(chineseReading || '').trim();
+    fields.forms = parseForms(String(formsText || ''));
+  }
+  return fields;
+}
+
+async function saveNewCard(fields) {
+  const { card } = await FlashStore.addCard(fields);
+  state.cards.push(card);
+  if (card.deck === 'Words' && Number.isSafeInteger(card.wordNumber)) {
+    state.meta = { ...state.meta, nextWordNumber: Math.max(
+      Number.isSafeInteger(state.meta?.nextWordNumber) ? state.meta.nextWordNumber : 1,
+      card.wordNumber + 1,
+    ) };
+  }
+  state.article.cache.clear();
+  renderDeckControls();
+  return card;
 }
 
 function wordBackHtml(card) {
@@ -754,8 +788,8 @@ function wordLibraryMatches(card, filter, now = Date.now()) {
   if (card.deck !== 'Words') return false;
   if (filter === 'due') return Number(card.due) <= now;
   if (filter === 'new') return Number(card.streak || 0) === 0 && Number(card.lapses || 0) === 0;
-  if (filter === 'lapsed') return Number(card.lapses || 0) > 0;
-  if (filter === 'mastered') return Number(card.streak || 0) >= 3 && Number(card.lapses || 0) === 0;
+  if (filter === 'lapsed') return FlashLogic.isWeakCard(card);
+  if (filter === 'mastered') return Number(card.streak || 0) >= 3;
   return true;
 }
 
@@ -813,7 +847,7 @@ function formatWordDue(due, now = Date.now()) {
 }
 
 function wordLearningStatus(card, now = Date.now()) {
-  if (Number(card.lapses || 0) > 0) return { key: 'lapsed', label: '易错' };
+  if (FlashLogic.isWeakCard(card)) return { key: 'lapsed', label: '易错' };
   if (Number(card.streak || 0) >= 3) return { key: 'mastered', label: '已掌握' };
   if (Number(card.due) <= now) return { key: 'due', label: '待复习' };
   if (Number(card.streak || 0) === 0) return { key: 'new', label: '新词' };
@@ -1700,6 +1734,230 @@ function updateAddForm() {
   document.querySelectorAll('[data-word-field]').forEach((field) => { field.hidden = isSentence; });
 }
 
+/* ---------- AI learning ---------- */
+
+const AI_SETTINGS_KEY = 'flashdesk-ai-settings';
+const AI_HISTORY_KEY = 'flashdesk-ai-history';
+
+function loadAiSettings() {
+  try {
+    const value = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || '{}');
+    return { endpoint: typeof value.endpoint === 'string' ? value.endpoint : '', token: typeof value.token === 'string' ? value.token : '' };
+  } catch { return { endpoint: '', token: '' }; }
+}
+
+function loadAiHistory() {
+  try { return FlashAiLearning.normalizeRecentGenerations(JSON.parse(localStorage.getItem(AI_HISTORY_KEY) || '{}')); }
+  catch { return { generations: [] }; }
+}
+
+let aiSettings = loadAiSettings();
+let aiHistory = loadAiHistory();
+
+function saveAiSettings(endpoint, token) {
+  aiSettings = { endpoint: String(endpoint || '').trim().replace(/\/+$/, ''), token: String(token || '').trim() };
+  try { localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)); } catch { /* private mode */ }
+}
+
+function rememberAiGeneration(type, targets) {
+  const targetWords = targets.map((item) => typeof item === 'string' ? item : item.front);
+  aiHistory = FlashAiLearning.recordAiGeneration(aiHistory, { type, targetWords });
+  try { localStorage.setItem(AI_HISTORY_KEY, JSON.stringify(aiHistory)); } catch { /* private mode */ }
+}
+
+function aiHeaders() {
+  return { Authorization: `Bearer ${aiSettings.token}`, 'Content-Type': 'application/json' };
+}
+
+async function aiFetch(path, options = {}) {
+  if (!aiSettings.endpoint || !aiSettings.token) throw Object.assign(new Error('请先配置 AI 服务。'), { code: 'NOT_CONFIGURED' });
+  const response = await fetch(`${aiSettings.endpoint}${path}`, { ...options, headers: { ...aiHeaders(), ...(options.headers || {}) } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok === false) {
+    const code = body?.error?.code || 'UPSTREAM_ERROR';
+    const messages = { UNAUTHORIZED: '访问 Token 无效。', RATE_LIMITED: '请求过于频繁，请稍后再试。', INVALID_AI_OUTPUT: 'AI 输出格式错误，请换一组。', TIMEOUT: 'AI 请求超时，请重试。', INVALID_REQUEST: 'AI 请求数据无效。' };
+    throw Object.assign(new Error(messages[code] || 'AI 服务暂时不可用。'), { code });
+  }
+  return body;
+}
+
+let currentAiPronunciationAudio = null;
+let currentAiPronunciationObjectUrl = '';
+
+function releaseAiPronunciation() {
+  if (currentAiPronunciationAudio) {
+    try { currentAiPronunciationAudio.pause(); } catch { /* already stopped */ }
+    currentAiPronunciationAudio = null;
+  }
+  if (currentAiPronunciationObjectUrl) {
+    try { URL.revokeObjectURL(currentAiPronunciationObjectUrl); } catch { /* already released */ }
+    currentAiPronunciationObjectUrl = '';
+  }
+}
+
+async function playAiPronunciation(text, button) {
+  const value = String(text || '').trim();
+  if (!value || button?.disabled) return;
+  const label = button?.dataset.aiPronunciationLabel || button?.textContent || 'AI发音';
+  if (button) {
+    button.dataset.aiPronunciationLabel = label;
+    button.textContent = 'AI发音中…';
+    button.disabled = true;
+  }
+  try {
+    if (!aiSettings.endpoint || !aiSettings.token) throw new Error('AI pronunciation is not configured');
+    releaseAiPronunciation();
+    const response = await fetch(`${aiSettings.endpoint}/pronounce`, {
+      method: 'POST',
+      headers: aiHeaders(),
+      body: JSON.stringify({ text: value, locale: 'en-US' }),
+    });
+    if (!response.ok) throw new Error(`AI pronunciation failed (${response.status})`);
+    const blob = await response.blob();
+    if (!validAudioBlob(blob)) throw new Error('AI pronunciation response is not audio');
+    const objectUrl = URL.createObjectURL(blob);
+    const audio = new Audio(objectUrl);
+    currentAiPronunciationAudio = audio;
+    currentAiPronunciationObjectUrl = objectUrl;
+    const release = () => {
+      if (currentAiPronunciationAudio === audio) currentAiPronunciationAudio = null;
+      if (currentAiPronunciationObjectUrl === objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        currentAiPronunciationObjectUrl = '';
+      }
+    };
+    audio.onended = release;
+    audio.onerror = () => {
+      release();
+      if (button) { button.textContent = 'AI发音失败'; button.disabled = false; }
+    };
+    await audio.play();
+    if (button) { button.textContent = label; button.disabled = false; }
+  } catch {
+    releaseAiPronunciation();
+    if (button) { button.textContent = 'AI发音失败'; button.disabled = false; }
+  }
+}
+
+function aiTargets(count, preferredWords = []) {
+  return FlashAiLearning.selectAiTargetWords({ cards: state.cards, history: state.history, recentAiTargets: aiHistory.generations, preferredWords, count, now: Date.now() });
+}
+
+function aiContext(targets, extras = {}) {
+  return FlashAiLearning.buildAiContext({ cards: state.cards, targetWords: targets, unknownWords: state.article.unknownWords, ...extras });
+}
+
+function aiUsageHtml(usage) {
+  if (!usage || [usage.inputTokens, usage.outputTokens, usage.totalTokens].every((value) => value == null)) return '';
+  const part = (label, value) => value == null ? '' : `<span>${label} ${Number(value).toLocaleString()} tokens</span>`;
+  return `<div class="ai-usage">本次 AI 用量：${part('输入', usage.inputTokens)} ${part('输出', usage.outputTokens)} ${part('总计', usage.totalTokens)}</div>`;
+}
+
+function aiTargetHtml(targets, label) {
+  return targets.length ? `<div class="ai-targets"><span class="micro-label">${label}</span><div>${targets.map((item) => `<span>${esc(item.front)}</span>`).join('')}</div></div>` : '';
+}
+
+function interactiveWordHtml(text, renderWord) {
+  const value = String(text || '');
+  const tokens = FlashArticleUtils.wordTokens(value);
+  let html = ''; let position = 0;
+  for (const token of tokens) {
+    html += esc(value.slice(position, token.index));
+    html += renderWord(token);
+    position = token.index + token.text.length;
+  }
+  return html + esc(value.slice(position));
+}
+
+function aiSentenceTextHtml(sentence, index, lookup) {
+  return interactiveWordHtml(sentence.english, (token) => {
+    const learned = lookup.has(FlashArticleUtils.wordKey(token.text));
+    return `<span class="article-word${learned ? ' learned' : ''}" data-ai-sentence-word="${esc(token.text)}" data-ai-sentence-index="${index}">${esc(token.text)}</span>`;
+  });
+}
+
+function aiSettingsHtml() {
+  const service = state.ai.service;
+  return `<details class="panel ai-settings">
+    <summary>AI 服务</summary>
+    <div class="ai-settings-grid">
+      <label class="field"><span class="micro-label">Worker 地址</span><input id="ai-endpoint" type="url" value="${esc(aiSettings.endpoint)}" placeholder="https://your-ai-worker.workers.dev"></label>
+      <label class="field"><span class="micro-label">访问 Token</span><input id="ai-token" type="password" value="${esc(aiSettings.token)}" autocomplete="off"></label>
+    </div>
+    <div class="form-actions"><button type="button" class="btn" data-ai-save-settings>保存</button><button type="button" class="btn" data-ai-test>测试连接</button></div>
+    <p class="ai-service-status" id="ai-service-status">${service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接'}</p>
+  </details>`;
+}
+
+function renderAiHome() {
+  $('#ai-root').innerHTML = `<div class="ai-page">
+    <header class="ai-head"><div><h2>AI 个性化学习</h2><p>AI 只生成候选内容，保存始终由你确认。</p></div></header>
+    <div class="ai-home-actions">
+      <button type="button" class="panel ai-entry" data-ai-mode="sentences"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></button>
+      <button type="button" class="panel ai-entry" data-ai-mode="article"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></button>
+    </div>${aiSettingsHtml()}</div>`;
+}
+
+function renderAiSentences() {
+  const preview = state.ai.preview?.type === 'sentences' ? state.ai.preview : null;
+  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+  const sentence = preview?.data.sentences[0] || null;
+  const card = sentence ? (() => {
+    const index = 0;
+    const exists = FlashArticleUtils.sentenceExists(state.cards, sentence.english);
+    return `<article class="panel ai-sentence-card"><p>${aiSentenceTextHtml(sentence, index, lookup)}</p>
+      ${aiTargetHtml(sentence.targetWordsUsed.map((front) => ({ front })), '本句练习词')}
+      <div class="ai-card-actions"><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="1">🔊 正常</button><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="0.75">🐢 慢速</button><button class="btn" type="button" data-ai-pronounce="${esc(sentence.english)}">AI发音</button>
+      <button class="btn" type="button" data-ai-reveal="${index}">${state.ai.revealed.has(index) ? '隐藏参考翻译' : '查看参考翻译'}</button>
+      ${exists ? '<span class="ai-exists">已存在于长句库</span>' : `<button class="btn btn-primary" type="button" data-ai-add-sentence="${index}">加入长句库</button>`}</div>
+      ${state.ai.revealed.has(index) ? `<p class="ai-translation">${esc(sentence.referenceChinese)}</p>` : ''}</article>`;
+  })() : '';
+  $('#ai-root').innerHTML = `<div class="ai-page"><button class="article-back" type="button" data-ai-home>← 返回</button><header class="ai-head"><h2>今日长句</h2><p>优先使用你的新词、易错词和久未练习词。</p></header>
+    ${aiTargetHtml(state.ai.targets, '本轮候选重点词')}
+    ${preview ? '' : `<div class="form-actions"><button type="button" class="btn btn-primary" data-ai-generate-sentences ${state.ai.loading ? 'disabled' : ''}>${state.ai.loading ? '正在生成…' : '生成今日长句'}</button></div>`}
+    ${state.ai.error ? `<p class="ai-error">${esc(state.ai.error)}</p>` : ''}<div class="ai-results">${card}</div>${preview ? `${aiUsageHtml(preview.usage)}<div class="form-actions"><button type="button" class="btn" data-ai-generate-sentences>换一句</button></div>` : ''}${aiSettingsHtml()}</div>`;
+}
+
+function renderAiArticle() {
+  const preview = state.ai.preview?.type === 'article' ? state.ai.preview : null;
+  const words = preview ? FlashArticleUtils.wordTokens(preview.data.content).length : 0;
+  $('#ai-root').innerHTML = `<div class="ai-page"><button class="article-back" type="button" data-ai-home>← 返回</button><header class="ai-head"><h2>今日短文</h2><p>生成自然、完整的个性化英文阅读材料。</p></header>
+    <div class="panel ai-options"><label class="field"><span class="micro-label">Topic</span><select id="ai-topic"><option value="auto">自动</option><option value="ai-tech">AI与科技</option><option value="work">工作</option><option value="travel">旅行</option><option value="daily">日常生活</option><option value="business">商业经济</option></select></label>
+    <label class="field"><span class="micro-label">Difficulty</span><select id="ai-difficulty"><option value="easy">简单</option><option value="medium">适中</option></select></label></div>
+    ${aiTargetHtml(state.ai.targets, '本篇重点复习词')}
+    <div class="form-actions"><button type="button" class="btn btn-primary" data-ai-generate-article ${state.ai.loading ? 'disabled' : ''}>${state.ai.loading ? '正在生成…' : preview ? '重新生成' : '生成短文'}</button></div>
+    ${state.ai.error ? `<p class="ai-error">${esc(state.ai.error)}</p>` : ''}
+    ${preview ? `<article class="panel ai-article-preview"><h3>${esc(preview.data.title)}</h3><div class="micro-label">约 ${words} words</div>${aiTargetHtml(preview.data.targetWordsUsed.map((front) => ({ front })), '实际使用重点词')}<div class="ai-article-content">${esc(preview.data.content).replace(/\n\s*\n/g, '</p><p>').replace(/^/, '<p>').replace(/$/, '</p>')}</div><div class="form-actions"><button class="btn btn-primary" type="button" data-ai-save-article>保存并阅读</button><button class="btn" type="button" data-ai-generate-article>重新生成</button></div></article>${aiUsageHtml(preview.usage)}` : ''}${aiSettingsHtml()}</div>`;
+  const topic = $('#ai-topic'); const difficulty = $('#ai-difficulty');
+  if (topic) topic.value = state.ai.topic; if (difficulty) difficulty.value = state.ai.difficulty;
+}
+
+function renderAiView() {
+  if (state.ai.mode === 'sentences') renderAiSentences();
+  else if (state.ai.mode === 'article') renderAiArticle();
+  else renderAiHome();
+}
+
+async function generateAi(type) {
+  if (state.ai.loading) return;
+  state.ai.loading = true; state.ai.error = ''; state.ai.preview = null; state.ai.revealed = new Set();
+  const article = type === 'article';
+  const preferredWords = article ? FlashAiLearning.latestSentenceTargetWords(aiHistory) : [];
+  state.ai.targets = aiTargets(article ? 10 : FlashAiLearning.sentenceTargetCount(), preferredWords);
+  renderAiView();
+  try {
+    const task = article ? 'generate_article' : 'generate_sentences';
+    const context = aiContext(state.ai.targets, article ? { topic: state.ai.topic, difficulty: state.ai.difficulty } : {});
+    const request = FlashAiLearning.buildAiRequest(task, context, article ? { wordRange: [200, 300] } : { count: 1 });
+    const result = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    state.ai.preview = { type, data: result.data, usage: result.usage };
+    state.ai.service = { provider: result.provider, model: result.model };
+    const usedTargets = article ? result.data.targetWordsUsed : result.data.sentences[0]?.targetWordsUsed;
+    rememberAiGeneration(type, usedTargets?.length ? usedTargets : state.ai.targets);
+  } catch (err) { state.ai.error = err.message; }
+  finally { state.ai.loading = false; renderAiView(); }
+}
+
 /* ---------- articles ---------- */
 
 function articleWordVersion() {
@@ -1952,6 +2210,125 @@ function openArticleWord(word) {
   if (!dialog.open) dialog.showModal();
 }
 
+function aiLookupExistingCard(word, result) {
+  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+  const baseForm = String(result?.baseForm || '').trim();
+  return (baseForm && lookup.get(FlashArticleUtils.wordKey(baseForm)))
+    || lookup.get(FlashArticleUtils.wordKey(word)) || null;
+}
+
+function openAiSentenceWord(word, sentence, { error = '', editing = false, loading = false } = {}) {
+  const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
+  const result = state.ai.lookupCache.get(cacheKey) || null;
+  const card = aiLookupExistingCard(word, result);
+  const details = card ? wordDetails(card) : null;
+  const draft = result && !card && editing ? FlashAiLearning.wordDraftFromLookup(word, result) : null;
+  const detail = (label, value) => value
+    ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
+  $('#article-action-content').innerHTML = `<div class="article-sheet">
+    <div class="micro-label">当前单词</div><h3>${esc(word)}</h3>
+    ${card ? `<p class="article-learned-label">已在单词库：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
+      ${detail('中文意思', card.back)}
+      ${detail('🧠 发音拆解', details.memoryReading)}
+      ${detail('🗣 中文近似', details.chineseReading)}`
+      : loading ? '<p class="muted ai-word-loading">正在查询…</p>'
+      : error ? `<p class="ai-error">查询失败：${esc(error)}</p>`
+      : result && editing ? `${detail('本句中', result.meaningInContextZh)}
+        <form id="ai-word-inline-form" class="ai-word-inline-form" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">
+          <label class="field"><span class="micro-label">英文单词</span><input id="ai-word-front" required value="${esc(draft.front)}"></label>
+          <label class="field"><span class="micro-label">中文意思</span><textarea id="ai-word-back" rows="2" required>${esc(draft.back)}</textarea></label>
+          <label class="field"><span class="micro-label">🧠 发音拆解</span><input id="ai-word-memory-reading" value="${esc(draft.memoryReading)}"></label>
+          <label class="field"><span class="micro-label">🗣 中文近似</span><input id="ai-word-chinese-reading" value="${esc(draft.chineseReading)}"></label>
+          <label class="field"><span class="micro-label">词形变化（逗号或换行分隔）</span><textarea id="ai-word-forms" rows="2">${esc(draft.forms.join(', '))}</textarea></label>
+          <p class="pronunciation-note">发音提示是可编辑草稿，标准发音以音频为准。</p>
+          <p class="ai-error" id="ai-word-inline-error" hidden></p>
+          <button type="submit" class="btn btn-primary" id="ai-word-inline-save">保存到单词库</button>
+        </form>`
+      : result ? `${detail('中文意思', result.meaningZh)}${detail('本句中', result.meaningInContextZh)}
+        ${detail('🧠 发音拆解', result.memoryReading)}${detail('🗣 中文近似', result.chineseReading)}`
+      : ''}
+    <div class="article-sheet-actions">
+      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
+      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
+      <button type="button" class="btn" data-ai-pronounce="${esc(word)}">AI发音</button>
+      ${card || loading || editing ? ''
+        : error ? `<button type="button" class="btn" data-ai-retry-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">重试</button>`
+        : result ? `<button type="button" class="btn btn-primary" data-ai-edit-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">加入单词库</button>` : ''}
+    </div></div>`;
+  const dialog = $('#article-action-dialog');
+  if (!dialog.open) dialog.showModal();
+}
+
+async function lookupAiSentenceWord(word, sentence) {
+  const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
+  if (state.ai.lookupCache.has(cacheKey)) return openAiSentenceWord(word, sentence);
+  openAiSentenceWord(word, sentence, { loading: true });
+  try {
+    const request = FlashAiLearning.buildLookupWordRequest(word, sentence);
+    const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    state.ai.lookupCache.set(cacheKey, response.data);
+    state.ai.service = { provider: response.provider, model: response.model };
+    openAiSentenceWord(word, sentence);
+  } catch (err) {
+    openAiSentenceWord(word, sentence, { error: err.message });
+  }
+}
+
+async function showAiSentenceWord(word, sentence) {
+  if (aiLookupExistingCard(word, null)) return openAiSentenceWord(word, sentence);
+  await lookupAiSentenceWord(word, sentence);
+}
+
+function refreshAiSentenceWordLookup() {
+  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+  document.querySelectorAll('[data-ai-sentence-word]').forEach((element) => {
+    element.classList.toggle('learned', lookup.has(FlashArticleUtils.wordKey(element.dataset.aiSentenceWord)));
+  });
+}
+
+async function saveInlineAiWord(form) {
+  const word = form.dataset.aiWord;
+  const sentence = form.dataset.aiSentence;
+  const submit = form.querySelector('#ai-word-inline-save');
+  const error = form.querySelector('#ai-word-inline-error');
+  if (submit.disabled) return;
+  let fields;
+  try {
+    fields = newCardFields({
+      deck: 'Words', front: form.querySelector('#ai-word-front').value,
+      back: form.querySelector('#ai-word-back').value,
+      memoryReading: form.querySelector('#ai-word-memory-reading').value,
+      chineseReading: form.querySelector('#ai-word-chinese-reading').value,
+      formsText: form.querySelector('#ai-word-forms').value,
+    });
+  } catch (err) {
+    error.hidden = false; error.textContent = err.message; return;
+  }
+  submit.disabled = true; submit.textContent = '保存中…';
+  try {
+    const card = await saveNewCard(fields);
+    const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
+    const result = state.ai.lookupCache.get(cacheKey);
+    if (result) state.ai.lookupCache.set(cacheKey, { ...result, baseForm: card.front });
+    refreshAiSentenceWordLookup();
+    openAiSentenceWord(word, sentence);
+    const label = $('#article-action-content .article-learned-label');
+    if (label) label.textContent = `✓ 已加入 ${card.wordNumber ? `#${card.wordNumber} ` : ''}${card.front}`;
+  } catch (err) {
+    const existing = FlashArticleUtils.buildWordLookup(state.cards).get(FlashArticleUtils.wordKey(fields.front));
+    if (existing) {
+      const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
+      const result = state.ai.lookupCache.get(cacheKey);
+      if (result) state.ai.lookupCache.set(cacheKey, { ...result, baseForm: existing.front });
+      refreshAiSentenceWordLookup();
+      openAiSentenceWord(word, sentence);
+      return;
+    }
+    error.hidden = false; error.textContent = err.message;
+    submit.disabled = false; submit.textContent = '保存到单词库';
+  }
+}
+
 async function setArticleUnknown(word, unknown) {
   try {
     const words = await ArticleStore.setUnknownWord(word, unknown);
@@ -1985,7 +2362,7 @@ function openArticleSentence(text) {
   $('#article-action-dialog').showModal();
 }
 
-function prefillArticleCard(deck, front) {
+function prefillArticleCard(deck, front, back = '', wordDraft = {}) {
   $('#article-action-dialog').close();
   state.article.returnToId = state.article.current?.id || null;
   switchView('add');
@@ -1993,9 +2370,9 @@ function prefillArticleCard(deck, front) {
   $('#add-type').value = deck;
   updateAddForm();
   $('#add-front').value = front;
-  $('#add-back').value = '';
-  $('#add-memory-reading').value = '';
-  $('#add-chinese-reading').value = '';
+  $('#add-back').value = back;
+  $('#add-memory-reading').value = deck === 'Words' ? String(wordDraft.memoryReading || '') : '';
+  $('#add-chinese-reading').value = deck === 'Words' ? String(wordDraft.chineseReading || '') : '';
   $('#add-forms').value = '';
   $('#add-back').focus();
 }
@@ -2011,7 +2388,7 @@ function switchView(name) {
   state.view = name;
   document.body.classList.toggle('reading-view', name === 'reading');
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('btn-active', b.dataset.view === name));
-  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'browse']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse']) $(`#view-${v}`).hidden = v !== name;
   if (name === 'review') {
     state.session = freshSession();
     buildQueue();
@@ -2026,6 +2403,8 @@ function switchView(name) {
     renderWordLibrary();
   } else if (name === 'reading') {
     renderArticleView();
+  } else if (name === 'ai') {
+    renderAiView();
   } else if (name === 'add') {
     updateAddForm();
     setAddMode(state.addMode);
@@ -2039,6 +2418,7 @@ function bindEvents() {
     b.addEventListener('click', () => {
       if (b.dataset.view === 'words') state.wordLibrary.selectedId = null;
       if (b.dataset.view === 'reading') state.article.mode = 'list';
+      if (b.dataset.view === 'ai') state.ai.mode = 'home';
       switchView(b.dataset.view);
     }));
 
@@ -2283,8 +2663,14 @@ function bindEvents() {
   $('#article-action-content').addEventListener('click', async (e) => {
     const button = e.target.closest('button');
     if (!button) return;
-    if (button.dataset.articleSpeak !== undefined) {
+    if (button.dataset.aiPronounce !== undefined) {
+      await playAiPronunciation(button.dataset.aiPronounce, button);
+    } else if (button.dataset.articleSpeak !== undefined) {
       playEnglish(button.dataset.articleSpeak, { rate: Number(button.dataset.rate) || 1, button });
+    } else if (button.dataset.aiRetryWord !== undefined) {
+      await lookupAiSentenceWord(button.dataset.aiRetryWord, button.dataset.aiSentence);
+    } else if (button.dataset.aiEditWord !== undefined) {
+      openAiSentenceWord(button.dataset.aiEditWord, button.dataset.aiSentence, { editing: true });
     } else if (button.dataset.articleUnknown !== undefined) {
       await setArticleUnknown(button.dataset.articleUnknown, true);
     } else if (button.dataset.articleKnown !== undefined) {
@@ -2295,33 +2681,80 @@ function bindEvents() {
       prefillArticleCard('Sentences', button.dataset.articleAddSentence);
     }
   });
+  $('#article-action-content').addEventListener('submit', async (e) => {
+    const form = e.target.closest('#ai-word-inline-form');
+    if (!form) return;
+    e.preventDefault();
+    await saveInlineAiWord(form);
+  });
+
+  $('#ai-root').addEventListener('change', (e) => {
+    if (e.target.id === 'ai-topic') state.ai.topic = e.target.value;
+    if (e.target.id === 'ai-difficulty') state.ai.difficulty = e.target.value;
+  });
+
+  $('#ai-root').addEventListener('click', async (e) => {
+    const word = e.target.closest('[data-ai-sentence-word]');
+    if (word) {
+      e.preventDefault(); e.stopPropagation();
+      const sentence = state.ai.preview?.data.sentences[Number(word.dataset.aiSentenceIndex)];
+      if (sentence) await showAiSentenceWord(word.dataset.aiSentenceWord, sentence.english);
+      return;
+    }
+    const button = e.target.closest('button');
+    if (!button) return;
+    if (button.dataset.aiMode) {
+      state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.error = ''; renderAiView();
+    } else if (button.hasAttribute('data-ai-home')) {
+      state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; renderAiHome();
+    } else if (button.hasAttribute('data-ai-save-settings')) {
+      saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); $('#ai-service-status').textContent = 'AI 设置已保存在此设备。';
+    } else if (button.hasAttribute('data-ai-test')) {
+      saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); button.disabled = true;
+      try { const result = await aiFetch('/health'); state.ai.service = { provider: result.provider, model: result.model }; $('#ai-service-status').textContent = `Provider：${result.provider} · Model：${result.model} · 已连接`; }
+      catch (err) { $('#ai-service-status').textContent = err.message; }
+      finally { button.disabled = false; }
+    } else if (button.hasAttribute('data-ai-generate-sentences')) {
+      await generateAi('sentences');
+    } else if (button.hasAttribute('data-ai-generate-article')) {
+      state.ai.topic = $('#ai-topic')?.value || state.ai.topic; state.ai.difficulty = $('#ai-difficulty')?.value || state.ai.difficulty; await generateAi('article');
+    } else if (button.dataset.aiPronounce !== undefined) {
+      await playAiPronunciation(button.dataset.aiPronounce, button);
+    } else if (button.dataset.aiSpeak !== undefined) {
+      playEnglish(button.dataset.aiSpeak, { rate: Number(button.dataset.rate) || 1, button });
+    } else if (button.dataset.aiReveal !== undefined) {
+      const index = Number(button.dataset.aiReveal); if (state.ai.revealed.has(index)) state.ai.revealed.delete(index); else state.ai.revealed.add(index); renderAiSentences();
+    } else if (button.dataset.aiAddSentence !== undefined) {
+      const sentence = state.ai.preview?.data.sentences[Number(button.dataset.aiAddSentence)];
+      if (sentence) prefillArticleCard('Sentences', sentence.english, sentence.referenceChinese);
+    } else if (button.hasAttribute('data-ai-save-article')) {
+      const preview = state.ai.preview;
+      if (!preview || preview.type !== 'article') return;
+      button.disabled = true;
+      try {
+        const article = await ArticleStore.create({ title: preview.data.title, content: preview.data.content, source: 'FlashDesk AI', sourceUrl: '', publishedAt: '' });
+        state.articles.push(article); state.article.cache.delete(article.id); await openArticle(article.id);
+      } catch (err) { state.ai.error = `保存失败：${err.message}`; button.disabled = false; renderAiArticle(); }
+    }
+  });
 
   $('#add-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const front = $('#add-front').value.trim();
-    const back = $('#add-back').value.trim();
     const deck = $('#add-type').value;
-    if (!front || !back || !deck) return;
     const submit = $('#add-submit');
     if (submit.disabled) return;
-    const fields = { front, back, deck };
-    if (deck === 'Words') {
-      fields.memoryReading = $('#add-memory-reading').value.trim();
-      fields.chineseReading = $('#add-chinese-reading').value.trim();
-      fields.forms = parseForms($('#add-forms').value);
-    }
+    let fields;
+    try {
+      fields = newCardFields({
+        deck, front: $('#add-front').value, back: $('#add-back').value,
+        memoryReading: $('#add-memory-reading').value,
+        chineseReading: $('#add-chinese-reading').value,
+        formsText: $('#add-forms').value,
+      });
+    } catch { return; }
     submit.disabled = true;
     try {
-      const { card } = await FlashStore.addCard(fields);
-      state.cards.push(card);
-      if (card.deck === 'Words' && Number.isSafeInteger(card.wordNumber)) {
-        state.meta = { ...state.meta, nextWordNumber: Math.max(
-          Number.isSafeInteger(state.meta?.nextWordNumber) ? state.meta.nextWordNumber : 1,
-          card.wordNumber + 1,
-        ) };
-      }
-      state.article.cache.clear();
-      renderDeckControls();
+      await saveNewCard(fields);
       $('#add-front').value = '';
       $('#add-back').value = '';
       if (deck === 'Words') {

@@ -165,6 +165,13 @@
 
   const WORD_QUIZ_TYPES = ['zh-en', 'en-zh', 'audio-en'];
 
+  // `lapses` is lifetime history. A card is currently weak only while the
+  // latest review streak has not recovered from that history.
+  function isWeakCard(card) {
+    return Math.max(0, Number(card?.lapses) || 0) > 0
+      && Math.max(0, Number(card?.streak) || 0) === 0;
+  }
+
   function wordQuizPool(cards) {
     return cards.filter((card) => card.deck === 'Words' && String(card.front || '').trim() && String(card.back || '').trim());
   }
@@ -174,14 +181,15 @@
     const streak = Math.max(0, Number(card.streak) || 0);
     const isNew = streak === 0 && lapses === 0;
     const isDue = Number(card.due) <= now;
-    const isMastered = streak >= 3 && lapses === 0;
-    const smart = lapses > 0 ? 500 + lapses * 20
+    const isMastered = streak >= 3;
+    const isWeak = isWeakCard(card);
+    const smart = isWeak ? 500 + lapses * 20
       : isNew ? 400
         : isDue ? 300
           : isMastered ? 50
             : 150;
     if (scope === 'new') return isNew ? 1000 : smart;
-    if (scope === 'lapsed') return lapses > 0 ? 1000 + lapses * 20 : smart;
+    if (scope === 'lapsed') return isWeak ? 1000 + lapses * 20 : smart;
     if (scope === 'random') return 1;
     return smart;
   }
@@ -304,7 +312,7 @@
 
   const FlashLogic = {
     buildTwinMap, reviewQueue, similarity, rankDistractors, buildChoices,
-    WORD_QUIZ_TYPES, wordQuizPool, wordQuizWeight, selectWordQuizCards,
+    WORD_QUIZ_TYPES, isWeakCard, wordQuizPool, wordQuizWeight, selectWordQuizCards,
     buildWordQuizChoices, buildWordQuizQuestion, mixedWordQuizTypes,
     alternateWordQuizType, insertWordQuizRetry, wordQuizResult,
   };

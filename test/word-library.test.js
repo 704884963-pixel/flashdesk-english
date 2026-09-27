@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const FlashLogic = require('../public/logic.js');
 
 const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8')
   .replace(/init\(\);\s*$/, '');
@@ -11,8 +12,8 @@ const now = new Date(2026, 8, 27, 12).getTime();
 const day = 86400000;
 const cards = [
   { id: '137', deck: 'Words', wordNumber: 137, front: 'approach', back: '方法；方式', forms: [], due: now - 3600000, streak: 0, lapses: 0, created: now - day },
-  { id: '136', deck: 'Words', wordNumber: 136, front: 'expect', back: '预期；期待', forms: ['expected'], due: now + day, streak: 1, lapses: 0, created: now - day * 2 },
-  { id: '135', deck: 'Words', wordNumber: 135, front: 'perform', back: '执行；表演', memoryReading: 'per + form', chineseReading: '破佛木', forms: [], due: now - day * 2, streak: 1, lapses: 3, created: now - day * 3 },
+  { id: '136', deck: 'Words', wordNumber: 136, front: 'expect', back: '预期；期待', forms: ['expected'], due: now + day, streak: 1, lapses: 1, created: now - day * 2 },
+  { id: '135', deck: 'Words', wordNumber: 135, front: 'perform', back: '执行；表演', memoryReading: 'per + form', chineseReading: '破佛木', forms: [], due: now - day * 2, streak: 0, lapses: 3, created: now - day * 3 },
   { id: '134', deck: 'Words', wordNumber: 134, front: 'available', back: '可用的', forms: [], due: now + day * 3, streak: 3, lapses: 0, created: now - day * 4 },
   { id: 'old', deck: 'Words', front: 'apple', back: '苹果', due: now + day * 2, streak: 0, lapses: 0, created: now - day * 5 },
   { id: 'sentence', deck: 'Sentences', front: 'Approach the desk.', back: '走近桌子。', due: now - 1, streak: 0, lapses: 0, created: now },
@@ -21,6 +22,7 @@ const cards = [
 function libraryClient(input = cards) {
   const nodes = new Map();
   const context = vm.createContext({
+    FlashLogic,
     localStorage: { getItem: () => null },
     document: { querySelector(selector) {
       if (!nodes.has(selector)) nodes.set(selector, { innerHTML: '', textContent: '', hidden: false });
@@ -64,12 +66,26 @@ test('new filter means no streak and no lapses', () => {
   assert.deepEqual(resultIds(libraryClient(), '', 'new'), ['137', 'old']);
 });
 
-test('lapsed filter includes lapses > 0', () => {
+test('weak filter includes only unresolved lapses', () => {
   assert.deepEqual(resultIds(libraryClient(), '', 'lapsed'), ['135']);
 });
 
-test('mastered filter requires streak >= 3 and no lapses', () => {
+test('recovered historical lapse is not weak in filter, count, or status', () => {
+  const h = libraryClient();
+  assert.equal(h.run("wordLibraryMatches(state.cards.find(card => card.id === '136'), 'lapsed', now)"), false);
+  assert.equal(h.run('wordLibraryStats(state.cards, now).lapsed'), 1);
+  assert.equal(h.run("wordLearningStatus(state.cards.find(card => card.id === '136'), now).label"), '学习中');
+});
+
+test('mastered filter follows recovered streak rather than lifetime lapses', () => {
   assert.deepEqual(resultIds(libraryClient(), '', 'mastered'), ['134']);
+  const recovered = { ...cards[3], id: 'recovered-mastered', wordNumber: 133, lapses: 2 };
+  assert.deepEqual(resultIds(libraryClient([...cards, recovered]), '', 'mastered'), ['134', 'recovered-mastered']);
+});
+
+test('Word Library weak checks use the shared helper', () => {
+  assert.match(source, /filter === 'lapsed'\) return FlashLogic\.isWeakCard\(card\)/);
+  assert.match(source, /function wordLearningStatus[\s\S]*?FlashLogic\.isWeakCard\(card\)/);
 });
 
 test('default sort is descending wordNumber with legacy Words last', () => {

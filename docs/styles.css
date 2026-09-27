@@ -562,6 +562,46 @@ select:focus, input:focus, textarea:focus {
   .article-sentence:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .article-word:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 }
+
+/* ---- AI learning ---- */
+
+.ai-page { max-width: 860px; margin: 0 auto; }
+.ai-head { margin: 4px 0 20px; }
+.ai-head h2 { font-family: var(--display); font-size: clamp(1.8rem, 5vw, 2.6rem); letter-spacing: -.03em; }
+.ai-head p { margin-top: 5px; color: var(--muted); }
+.ai-home-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.ai-entry { display: grid; gap: 6px; width: 100%; text-align: left; color: var(--text); cursor: pointer; }
+.ai-entry strong { font-family: var(--display); font-size: 1.3rem; }
+.ai-entry span { color: var(--muted); line-height: 1.5; }
+.ai-settings { margin-top: 18px; }
+.ai-settings summary { cursor: pointer; font-weight: 700; }
+.ai-settings-grid, .ai-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.ai-service-status, .ai-error, .ai-usage { margin-top: 10px; font-size: .82rem; color: var(--muted); }
+.ai-error { color: var(--bad); }
+.ai-targets { margin: 14px 0; }
+.ai-targets > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.ai-targets > div > span { padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); font-size: .78rem; }
+.ai-results { display: grid; gap: 12px; margin-top: 14px; }
+.ai-sentence-card { display: grid; gap: 12px; }
+.ai-sentence-card > p:first-child { font-size: 1.08rem; line-height: 1.65; }
+.ai-card-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ai-translation { padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); }
+.ai-exists { color: var(--accent); font-size: .82rem; }
+.ai-article-preview { margin-top: 16px; }
+.ai-article-preview h3 { font-family: var(--display); font-size: 1.55rem; }
+.ai-article-content { margin: 18px 0; font-size: 1.02rem; line-height: 1.75; }
+.ai-article-content p { margin-bottom: 1.2em; }
+.ai-usage { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.ai-word-inline-form { display: grid; gap: 10px; padding-top: 4px; }
+.ai-word-inline-form .btn-primary { justify-self: start; }
+
+@media (max-width: 560px) {
+  .ai-home-actions, .ai-settings-grid, .ai-options { grid-template-columns: minmax(0, 1fr); }
+  .ai-card-actions .btn { flex: 1 1 126px; }
+  .ai-word-inline-form .btn-primary { width: 100%; }
+  .ai-page { min-width: 0; }
+  .nav { width: 100%; }
+}
 .article-action-dialog { width: min(520px, calc(100vw - 28px)); max-height: min(78vh, 680px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
 .article-action-dialog::backdrop { background: #0009; }
 .article-sheet { display: grid; gap: 12px; padding: 22px 22px 8px; }
