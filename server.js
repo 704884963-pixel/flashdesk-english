@@ -82,6 +82,21 @@ function prepareWord(fields) {
   return { ...wordFields(fields), wordNumber: nextWordNumber() };
 }
 
+function addCardInMemory(fields) {
+  const deck = String(fields?.deck || '').trim();
+  const extra = deck === 'Words' ? prepareWord(fields) : {};
+  const front = String(fields?.front || '').trim();
+  const back = String(fields?.back || '').trim();
+  if (!front || !back || !deck) throw new Error('front, back, and deck are all required');
+  const card = toCard({ front, back, deck });
+  if (deck === 'Words') Object.assign(card, extra);
+  if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
+  data.cards.push(card);
+  return card;
+}
+
+const cloneData = (value) => JSON.parse(JSON.stringify(value));
+
 function editableWordFields(card, fields) {
   if (card.deck !== 'Words') return {};
   if (data.cards.some((other) => other.id !== card.id && other.deck === 'Words'
@@ -183,33 +198,54 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
-    let extra = {};
-    if (String(body?.deck || '').trim() === 'Words') {
-      try { extra = prepareWord(body); }
-      catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    const previous = data;
+    data = cloneData(data);
+    let card;
+    try {
+      card = addCardInMemory(body);
+      saveData();
     }
-    const front = String(body.front || '').trim();
-    const back = String(body.back || '').trim();
-    const deck = String(body.deck || '').trim();
-    if (!front || !back || !deck) return sendJSON(res, 400, { error: 'front, back, and deck are all required' });
-    const card = toCard({ front, back, deck });
-    if (deck === 'Words') {
-      card.wordNumber = extra.wordNumber;
-      card.memoryReading = extra.memoryReading;
-      card.chineseReading = extra.chineseReading;
-      card.forms = extra.forms;
-    }
-    const previousMeta = data.meta;
-    if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
-    data.cards.push(card);
-    try { saveData(); }
     catch (err) {
-      data.cards.pop();
-      if (previousMeta === undefined) delete data.meta;
-      else data.meta = previousMeta;
-      throw err;
+      data = previous;
+      return sendJSON(res, 400, { error: err.message });
     }
     return sendJSON(res, 201, { card });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/cards/batch') {
+    const body = await readBody(req);
+    if (!body || !Array.isArray(body.items)) return sendJSON(res, 400, { error: 'items must be an array' });
+    const previous = data;
+    data = cloneData(data);
+    const cards = [];
+    let addedWords = 0;
+    let addedSentences = 0;
+    let skipped = 0;
+    try {
+      for (const fields of body.items) {
+        const deck = String(fields?.deck || '').trim();
+        if (deck !== 'Words' && deck !== 'Sentences') throw new Error('batch items must be Words or Sentences');
+        const front = typeof fields.front === 'string' ? fields.front.trim() : '';
+        const back = typeof fields.back === 'string' ? fields.back.trim() : '';
+        if (!front || !back) throw new Error('front and back must be non-empty strings');
+        const duplicate = deck === 'Words'
+          ? data.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
+          : data.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
+        if (duplicate) { skipped += 1; continue; }
+        const card = addCardInMemory({ ...fields, front, back, deck });
+        cards.push(card);
+        if (deck === 'Words') addedWords += 1;
+        else addedSentences += 1;
+      }
+      saveData();
+    } catch (err) {
+      data = previous;
+      return sendJSON(res, 400, { error: err.message });
+    }
+    return sendJSON(res, 201, {
+      cards, addedWords, addedSentences, skipped,
+      ...(data.meta ? { meta: data.meta } : {}),
+    });
   }
 
   if (req.method === 'POST' && pathname === '/api/cards/grade') {

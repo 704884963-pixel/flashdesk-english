@@ -108,6 +108,10 @@
     </section>
 
     <section id="view-add" hidden>
+      <div class="add-mode-switch" aria-label="新增方式">
+        <button type="button" class="btn add-mode active" data-add-mode="single" aria-pressed="true">单条新增</button>
+        <button type="button" class="btn add-mode" data-add-mode="batch" aria-pressed="false">批量导入</button>
+      </div>
       <form id="add-form" class="panel form-panel">
         <label class="field">
           <span class="micro-label">内容类型</span>
@@ -142,6 +146,41 @@
           <span id="add-flash" class="micro-label flash" hidden>已添加 ✓</span>
         </div>
       </form>
+      <section id="batch-import-panel" class="panel batch-import-panel" hidden>
+        <div class="batch-import-heading">
+          <div>
+            <div class="micro-label">批量导入 Word + Sentence</div>
+            <p class="muted">先解析预览；只有点击“确认导入”后才会保存。</p>
+          </div>
+          <details class="batch-example">
+            <summary>查看示例格式</summary>
+            <pre>WORD
+front: expect
+back: 期待；预期
+memoryReading: ex + pect
+chineseReading: 伊克斯-佩克特
+forms: expected, expecting
+
+SENTENCE
+front: The agent receives the query.
+back: 智能体接收查询。</pre>
+          </details>
+        </div>
+        <label class="field">
+          <span class="micro-label">粘贴导入文本</span>
+          <textarea id="batch-import-text" rows="12" spellcheck="false" placeholder="在这里粘贴 WORD / SENTENCE 块"></textarea>
+        </label>
+        <div class="form-actions batch-import-actions">
+          <button type="button" class="btn" id="batch-preview-btn">解析预览</button>
+          <button type="button" class="btn btn-primary" id="batch-confirm-btn" hidden>确认导入</button>
+        </div>
+        <p id="batch-import-message" class="batch-import-message" role="status" aria-live="polite"></p>
+        <section id="batch-preview" hidden>
+          <div class="batch-preview-stats" id="batch-preview-stats"></div>
+          <div class="batch-preview-list" id="batch-preview-list"></div>
+        </section>
+        <section id="batch-import-result" class="batch-import-result" hidden aria-live="polite"></section>
+      </section>
     </section>
 
     <section id="view-words" hidden>
@@ -221,6 +260,7 @@
   <script src="logic.js" defer></script>
   <script src="store.js" defer></script>
   <script src="audio-cache.js" defer></script>
+  <script src="batch-import.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

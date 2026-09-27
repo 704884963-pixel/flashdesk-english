@@ -127,6 +127,18 @@
     return { ...wordFields(fields), wordNumber: nextWordNumber() };
   }
 
+  function addCardInMemory(fields) {
+    const deck = String(fields?.deck || '').trim();
+    const extra = deck === 'Words' ? prepareWord(fields) : {};
+    const front = String(fields?.front || '').trim();
+    const back = String(fields?.back || '').trim();
+    if (!front || !back || !deck) throw new Error('front, back, and deck are all required');
+    const card = { ...toCard({ front, back, deck }), ...extra };
+    if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
+    data.cards.push(card);
+    return card;
+  }
+
   function editableWordFields(card, fields) {
     if (card.deck !== 'Words') return {};
     if (data.cards.some((other) => other.id !== card.id && other.deck === 'Words'
@@ -164,30 +176,54 @@
 
     async addCard(fields) {
       await ensureReady();
-      let { front, back, deck } = fields;
-      deck = String(deck || '').trim();
-      const extra = deck === 'Words' ? prepareWord(fields) : {};
-      front = String(front || '').trim();
-      back = String(back || '').trim();
-      if (!front || !back || !deck) throw new Error('front, back, and deck are all required');
-      const card = toCard({ front, back, deck });
-      if (deck === 'Words') {
-        card.wordNumber = extra.wordNumber;
-        card.memoryReading = extra.memoryReading;
-        card.chineseReading = extra.chineseReading;
-        card.forms = extra.forms;
+      const previous = data;
+      data = clone(data);
+      let card;
+      try {
+        card = addCardInMemory(fields);
+        persist();
       }
-      const previousMeta = data.meta;
-      if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
-      data.cards.push(card);
-      try { persist(); }
       catch (err) {
-        data.cards.pop();
-        if (previousMeta === undefined) delete data.meta;
-        else data.meta = previousMeta;
+        data = previous;
         throw err;
       }
       return { card: clone(card) };
+    },
+
+    async importBatch(items) {
+      await ensureReady();
+      if (!Array.isArray(items)) throw new Error('items must be an array');
+      const previous = data;
+      data = clone(data);
+      const cards = [];
+      let addedWords = 0;
+      let addedSentences = 0;
+      let skipped = 0;
+      try {
+        for (const fields of items) {
+          const deck = String(fields?.deck || '').trim();
+          if (deck !== 'Words' && deck !== 'Sentences') throw new Error('batch items must be Words or Sentences');
+          const front = typeof fields.front === 'string' ? fields.front.trim() : '';
+          const back = typeof fields.back === 'string' ? fields.back.trim() : '';
+          if (!front || !back) throw new Error('front and back must be non-empty strings');
+          const duplicate = deck === 'Words'
+            ? data.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
+            : data.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
+          if (duplicate) { skipped += 1; continue; }
+          const card = addCardInMemory({ ...fields, front, back, deck });
+          cards.push(card);
+          if (deck === 'Words') addedWords += 1;
+          else addedSentences += 1;
+        }
+        persist();
+      } catch (err) {
+        data = previous;
+        throw err;
+      }
+      return {
+        cards: clone(cards), addedWords, addedSentences, skipped,
+        ...(data.meta ? { meta: clone(data.meta) } : {}),
+      };
     },
 
     async updateCard(id, fields) {

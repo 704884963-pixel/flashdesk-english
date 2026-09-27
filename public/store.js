@@ -16,6 +16,7 @@
   window.FlashStore = {
     load: () => api('/api/cards'), // -> {cards, history, meta?}; legacy Word defaults are read-only
     addCard: (fields) => postJSON('/api/cards', fields), // -> {card}
+    importBatch: (items) => postJSON('/api/cards/batch', { items }), // -> atomic batch result
     updateCard: (id, { front, back, memoryReading, chineseReading, forms }) => api(`/api/cards/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

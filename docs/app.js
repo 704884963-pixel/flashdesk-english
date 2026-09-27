@@ -5,6 +5,7 @@ const $ = (sel) => document.querySelector(sel);
 const state = {
   cards: [],
   history: [],
+  meta: {},
   deckFilter: 'All',
   view: 'review',
   session: null,
@@ -14,6 +15,8 @@ const state = {
     filter: 'all',
     selectedId: null,
   },
+  addMode: 'single',
+  batchPreview: null,
 };
 
 function freshSession() {
@@ -1571,6 +1574,116 @@ function renderBrowse() {
 
 /* ---------- add form ---------- */
 
+function setAddMode(mode) {
+  state.addMode = mode === 'batch' ? 'batch' : 'single';
+  document.querySelectorAll('[data-add-mode]').forEach((button) => {
+    const active = button.dataset.addMode === state.addMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  $('#add-form').hidden = state.addMode !== 'single';
+  $('#batch-import-panel').hidden = state.addMode !== 'batch';
+  if (state.addMode === 'single') $('#add-front').focus();
+  else $('#batch-import-text').focus();
+}
+
+function batchStatusInfo(item) {
+  if (item.status === 'importable') return { label: '可导入', cls: 'ready' };
+  if (item.status === 'existing') return { label: '已存在', cls: 'existing' };
+  if (item.status === 'batch-duplicate') return { label: '批次内重复', cls: 'existing' };
+  return { label: '错误', cls: 'error' };
+}
+
+function renderBatchPreview(preview) {
+  const stats = preview.stats;
+  $('#batch-preview-stats').innerHTML = `
+    <span>可导入 <strong>${stats.importable}</strong></span>
+    <span>已存在 <strong>${stats.existing}</strong></span>
+    <span>批次重复 <strong>${stats.batchDuplicate}</strong></span>
+    <span>错误 <strong>${stats.error}</strong></span>`;
+  $('#batch-preview-list').innerHTML = preview.items.map((item) => {
+    const status = batchStatusInfo(item);
+    const type = item.rawType || '未知类型';
+    const number = item.expectedWordNumber === null ? '' : ` #${item.expectedWordNumber}`;
+    return `<article class="batch-preview-item ${status.cls}">
+      <div class="batch-preview-top">
+        <span class="batch-preview-type">${esc(type)}${number}</span>
+        <span class="batch-status ${status.cls}">${status.label}</span>
+      </div>
+      ${item.front ? `<strong class="batch-preview-front">${esc(item.front)}</strong>` : ''}
+      ${item.back ? `<div class="batch-preview-back">${esc(item.back)}</div>` : ''}
+      ${item.reason ? `<div class="batch-preview-reason">原因：${esc(item.reason)}</div>` : ''}
+    </article>`;
+  }).join('');
+  $('#batch-preview').hidden = false;
+  $('#batch-confirm-btn').hidden = stats.importable === 0;
+  $('#batch-confirm-btn').disabled = false;
+}
+
+function previewBatchImport() {
+  const text = $('#batch-import-text').value;
+  if (!text.trim()) {
+    state.batchPreview = null;
+    $('#batch-preview').hidden = true;
+    $('#batch-confirm-btn').hidden = true;
+    $('#batch-import-message').textContent = '请先粘贴要导入的文本。';
+    return;
+  }
+  state.batchPreview = FlashBatchImport.previewBatchText(text, state.cards, state.meta);
+  $('#batch-import-message').textContent = state.batchPreview.items.length
+    ? '预览完成，尚未写入任何数据。'
+    : '没有找到可解析的 block。';
+  $('#batch-import-result').hidden = true;
+  renderBatchPreview(state.batchPreview);
+}
+
+async function confirmBatchImport() {
+  const preview = state.batchPreview;
+  if (!preview || !preview.stats.importable) return;
+  const button = $('#batch-confirm-btn');
+  if (button.disabled) return;
+  button.disabled = true;
+  $('#batch-import-message').textContent = '正在保存…';
+  try {
+    const fields = FlashBatchImport.importableFields(preview);
+    const result = await FlashStore.importBatch(fields);
+    state.cards.push(...result.cards);
+    if (result.meta) state.meta = result.meta;
+    renderDeckControls();
+    const skipped = preview.stats.existing + preview.stats.batchDuplicate + result.skipped;
+    $('#batch-import-message').textContent = '';
+    $('#batch-preview').hidden = true;
+    button.hidden = true;
+    $('#batch-import-result').hidden = false;
+    $('#batch-import-result').innerHTML = `
+      <h3>导入完成</h3>
+      <div class="batch-result-grid">
+        <span>新增单词 <strong>${result.addedWords}</strong></span>
+        <span>新增长句 <strong>${result.addedSentences}</strong></span>
+        <span>跳过重复 <strong>${skipped}</strong></span>
+        <span>错误 <strong>${preview.stats.error}</strong></span>
+      </div>
+      <div class="form-actions batch-result-actions">
+        <button type="button" class="btn btn-primary" id="batch-view-words">查看单词库</button>
+        <button type="button" class="btn" id="batch-import-more">继续导入</button>
+      </div>`;
+    state.batchPreview = null;
+  } catch (err) {
+    button.disabled = false;
+    $('#batch-import-message').textContent = `导入失败：${err.message}`;
+  }
+}
+
+function resetBatchImport() {
+  state.batchPreview = null;
+  $('#batch-import-text').value = '';
+  $('#batch-preview').hidden = true;
+  $('#batch-import-result').hidden = true;
+  $('#batch-confirm-btn').hidden = true;
+  $('#batch-import-message').textContent = '';
+  $('#batch-import-text').focus();
+}
+
 function updateAddForm() {
   const isSentence = $('#add-type').value === 'Sentences';
   $('#add-front-label').textContent = isSentence ? '英文长句' : '英文单词';
@@ -1602,7 +1715,7 @@ function switchView(name) {
     renderWordLibrary();
   } else if (name === 'add') {
     updateAddForm();
-    $('#add-front').focus();
+    setAddMode(state.addMode);
   }
 }
 
@@ -1757,6 +1870,30 @@ function bindEvents() {
 
   $('#add-type').addEventListener('change', updateAddForm);
 
+  document.querySelectorAll('[data-add-mode]').forEach((button) => {
+    button.addEventListener('click', () => setAddMode(button.dataset.addMode));
+  });
+
+  $('#batch-preview-btn').addEventListener('click', previewBatchImport);
+  $('#batch-confirm-btn').addEventListener('click', confirmBatchImport);
+  $('#batch-import-text').addEventListener('input', () => {
+    if (!state.batchPreview) return;
+    state.batchPreview = null;
+    $('#batch-preview').hidden = true;
+    $('#batch-confirm-btn').hidden = true;
+    $('#batch-import-message').textContent = '内容已变化，请重新解析预览。';
+  });
+  $('#batch-import-result').addEventListener('click', (e) => {
+    const button = e.target.closest('button');
+    if (!button) return;
+    if (button.id === 'batch-view-words') {
+      state.wordLibrary.selectedId = null;
+      switchView('words');
+    } else if (button.id === 'batch-import-more') {
+      resetBatchImport();
+    }
+  });
+
   $('#add-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const front = $('#add-front').value.trim();
@@ -1775,6 +1912,12 @@ function bindEvents() {
     try {
       const { card } = await FlashStore.addCard(fields);
       state.cards.push(card);
+      if (card.deck === 'Words' && Number.isSafeInteger(card.wordNumber)) {
+        state.meta = { ...state.meta, nextWordNumber: Math.max(
+          Number.isSafeInteger(state.meta?.nextWordNumber) ? state.meta.nextWordNumber : 1,
+          card.wordNumber + 1,
+        ) };
+      }
       renderDeckControls();
       $('#add-front').value = '';
       $('#add-back').value = '';
@@ -1931,9 +2074,10 @@ async function init() {
   initSpeechSettings();
   renderTtsSettings();
   try {
-    const { cards, history } = await FlashStore.load();
+    const { cards, history, meta } = await FlashStore.load();
     state.cards = cards;
     state.history = history;
+    state.meta = meta || {};
   } catch (err) {
     $('#review-area').innerHTML = `<div class="panel empty-panel"><p>无法加载卡片： ${esc(err.message)}</p></div>`;
     $('#view-review').hidden = false;
