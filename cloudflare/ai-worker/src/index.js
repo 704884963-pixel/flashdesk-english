@@ -2,7 +2,7 @@ import { createProvider } from './providers/index.js';
 import { sentenceMessages } from './prompts/sentences.js';
 import { articleMessages } from './prompts/article.js';
 import { lookupWordMessages } from './prompts/lookup-word.js';
-import { parseAiOutput, validateClientRequest } from './validation.js';
+import { englishWordCount, parseAiOutput, validateClientRequest } from './validation.js';
 import { createPronunciationProvider, validatePronunciationRequest } from './pronunciation.js';
 
 const MAX_BODY = 50 * 1024;
@@ -25,12 +25,24 @@ export function generationOptions(task, env) {
       maxOutputTokens: 240,
       temperature: 0.1,
       reasoning: false,
+      timeoutMs: 15000,
     };
   }
-  return { model: env.AI_MODEL };
+  return {
+    model: env.AI_MODEL,
+    timeoutMs: task === 'generate_article' ? 60000 : 45000,
+  };
 }
 
-export async function handleRequest(request, env, fetchImpl = fetch, pronunciationProviderFactory = createPronunciationProvider, now = Date.now) {
+export function isRetryableProviderError(error) {
+  return error?.name === 'AbortError'
+    || error?.networkFailure === true
+    || [502, 503, 504].includes(error?.status);
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function handleRequest(request, env, fetchImpl = fetch, pronunciationProviderFactory = createPronunciationProvider, now = Date.now, sleep = wait) {
   const url = new URL(request.url); const origin = request.headers.get('Origin') || '';
   if (origin && !allowedOrigins(env).has(origin)) return failure('UNAUTHORIZED', 'Origin not allowed', 403, '', env);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin, env) });
@@ -75,23 +87,60 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
   try { provider = createProvider(env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env); }
   try {
     const generation = generationOptions(input.task, env);
-    let providerMs = 0;
+    let providerTotalMs = 0;
+    let providerCalls = 0;
+    let networkRetries = 0;
+    let lengthRewrite = false;
+    let initialWordCount = null;
+    let finalWordCount = null;
     const generate = async (requestMessages) => {
-      const started = now();
-      try { return await provider.generate({ messages: requestMessages, task: input.task, options: input.options, ...generation }); }
-      finally { providerMs += Math.max(0, now() - started); }
+      const providerRequest = { messages: requestMessages, task: input.task, options: input.options, ...generation };
+      let requestAttempts = 0;
+      while (requestAttempts < 2) {
+        providerCalls += 1;
+        requestAttempts += 1;
+        const started = now();
+        try {
+          return await provider.generate(providerRequest);
+        } catch (error) {
+          if (requestAttempts < 2 && isRetryableProviderError(error)) {
+            networkRetries += 1;
+          } else {
+            throw error;
+          }
+        } finally {
+          providerTotalMs += Math.max(0, now() - started);
+        }
+        await sleep(1000);
+      }
+      throw new Error('provider attempts exhausted');
     };
     let generated = await generate(messages);
     let data;
     try { data = parseAiOutput(input.task, generated.content); }
-    catch {
-      generated = await generate([...messages, { role: 'user', content: 'Your previous output was invalid. Return only valid JSON matching the requested schema.' }]);
-      try { data = parseAiOutput(input.task, generated.content); } catch { return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env); }
+    catch { return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env); }
+    if (input.task === 'generate_sentences') {
+      initialWordCount = englishWordCount(data.sentences[0].english);
+      finalWordCount = initialWordCount;
+    }
+    if (input.task === 'generate_sentences' && initialWordCount < 28) {
+      lengthRewrite = true;
+      const rewriteMessages = [...messages,
+        { role: 'assistant', content: generated.content },
+        { role: 'user', content: 'The previous sentence is too short for this close-reading exercise. Rewrite it as ONE natural English sentence of approximately 30-40 words. Preserve the original meaning and naturally used target words. Add one or two meaningful grammatical or logical elements, such as a reason, consequence, condition, contrast, qualification, or relative or subordinate clause. Do not add filler, repeat the same idea, create a second sentence, use a semicolon to fake multiple sentences, or force unrelated target words. Return only valid JSON matching the original schema.' },
+      ];
+      generated = await generate(rewriteMessages);
+      try { data = parseAiOutput(input.task, generated.content); }
+      catch { return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env); }
+      finalWordCount = englishWordCount(data.sentences[0].english);
     }
     return reply({
       ok: true, task: input.task, provider: env.AI_PROVIDER, model: generation.model,
       data, usage: generated.usage,
-      ...(input.task === 'lookup_word' ? { timing: { providerMs } } : {}),
+      timing: {
+        providerTotalMs, providerCalls, networkRetries, lengthRewrite,
+        ...(input.task === 'generate_sentences' ? { initialWordCount, finalWordCount } : {}),
+      },
     }, 200, origin, env);
   } catch (error) {
     if (error?.name === 'AbortError') return failure('TIMEOUT', 'AI 请求超时', 504, origin, env);

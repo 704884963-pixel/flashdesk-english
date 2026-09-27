@@ -137,17 +137,54 @@ test('existing Word or form match bypasses lookup_word', () => {
   assert.match(section, /await lookupAiSentenceWord/);
 });
 test('lookup_word session cache is checked before the AI request', () => assert.match(appSource, /if \(state\.ai\.lookupCache\.has\(cacheKey\)\) return openAiSentenceWord/));
-test('lookup_word measures total latency only after a cache miss', () => {
+test('lookup_word records provider timing only after a cache miss', () => {
   const section = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));
   assert.ok(section.indexOf('lookupCache.has(cacheKey)') < section.indexOf('const started ='));
-  assert.match(section, /response\.timing\?\.providerMs/);
-  assert.match(section, /totalMs: Math\.max/);
+  assert.match(section, /rememberAiTiming\('lookup_word', response, started\)/);
 });
-test('AI service diagnostics display lookup total and provider timing without credentials', () => {
+test('AI timing helper records task, cumulative provider calls, retries and length rewrite', () => {
+  const section = appSource.slice(appSource.indexOf('function rememberAiTiming'), appSource.indexOf('function refreshAiServiceStatus'));
+  assert.match(section, /task,/);
+  assert.match(section, /totalMs: Math\.max/);
+  assert.match(section, /providerTotalMs/);
+  assert.match(section, /providerCalls/);
+  assert.match(section, /networkRetries/);
+  assert.match(section, /lengthRewrite/);
+  assert.match(section, /initialWordCount/);
+  assert.match(section, /finalWordCount/);
+});
+test('AI service diagnostics display the latest task timing without credentials', () => {
   const section = appSource.slice(appSource.indexOf('function aiServiceStatusHtml'), appSource.indexOf('function refreshAiServiceStatus'));
-  assert.match(section, /lookup_word：总耗时/);
+  assert.match(section, /最近请求/);
+  assert.match(section, /今日长句/);
+  assert.match(section, /今日短文/);
+  assert.match(section, /单词查询/);
+  assert.match(section, /总耗时/);
   assert.match(section, /Provider/);
+  assert.match(section, /Provider 调用/);
+  assert.match(section, /网络重试/);
+  assert.match(section, /长度重写/);
   assert.doesNotMatch(section, /aiSettings\.token|Authorization|API_KEY/);
+});
+test('AI timing UI safely falls back to legacy providerMs and attempts fields', () => {
+  const section = appSource.slice(appSource.indexOf('function rememberAiTiming'), appSource.indexOf('function refreshAiServiceStatus'));
+  assert.match(section, /timing\.providerTotalMs \?\? timing\.providerMs/);
+  assert.match(section, /timing\.providerCalls \?\? timing\.attempts/);
+  assert.match(section, /Number\(timing\.networkRetries\) \|\| 0/);
+  assert.match(section, /timing\.lengthRewrite === true/);
+  assert.match(section, /timing\.initialWordCount == null \? null/);
+  assert.match(section, /timing\.finalWordCount == null \? null/);
+});
+test('AI timing UI shows Sentence word counts only when diagnostics are present', () => {
+  const section = appSource.slice(appSource.indexOf('function aiServiceStatusHtml'), appSource.indexOf('function rememberAiTiming'));
+  assert.match(section, /timing\.initialWordCount == null \|\| timing\.finalWordCount == null/);
+  assert.match(section, /首次词数/);
+  assert.match(section, /最终词数/);
+});
+test('Sentence and Article generation both record response timing', () => {
+  const section = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles ---------- */'));
+  assert.match(section, /const started =/);
+  assert.match(section, /rememberAiTiming\(task, result, started\)/);
 });
 test('lookup shows an immediate loading state in the current dialog', () => {
   const section = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));

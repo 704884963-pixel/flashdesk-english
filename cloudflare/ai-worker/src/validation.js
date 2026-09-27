@@ -10,6 +10,7 @@ export function stripJsonFence(value) {
 
 const nonempty = (value) => typeof value === 'string' && Boolean(value.trim());
 const words = (value) => Array.isArray(value) && value.every(nonempty);
+export const englishWordCount = (value) => (String(value || '').match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
 
 export function validateAiData(task, data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid AI output');
@@ -27,7 +28,7 @@ export function validateAiData(task, data) {
     return { sentences };
   }
   if (!nonempty(data.title) || !nonempty(data.content) || !words(data.targetWordsUsed)) throw new Error('invalid article');
-  const wordCount = (data.content.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
+  const wordCount = englishWordCount(data.content);
   if (wordCount < 200 || wordCount > 300) throw new Error('invalid article length');
   return { title: data.title.trim(), content: data.content.trim(), targetWordsUsed: data.targetWordsUsed.map((w) => w.trim()) };
 }

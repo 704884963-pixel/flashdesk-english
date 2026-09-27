@@ -26,7 +26,7 @@ const state = {
   ai: {
     mode: 'home', loading: false, error: '', preview: null, targets: [],
     revealed: new Set(), service: null, topic: 'auto', difficulty: 'medium',
-    lookupCache: new Map(), lookupTiming: null,
+    lookupCache: new Map(), requestTiming: null,
   },
 };
 
@@ -1868,9 +1868,28 @@ function aiSettingsHtml() {
 
 function aiServiceStatusHtml(service = state.ai.service) {
   const connection = service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接';
-  const timing = state.ai.lookupTiming;
+  const timing = state.ai.requestTiming;
   if (!timing) return connection;
-  return `${connection}<br><span class="micro-label">lookup_word：总耗时 ${(timing.totalMs / 1000).toFixed(1)} 秒 · Provider ${(timing.providerMs / 1000).toFixed(1)} 秒</span>`;
+  const taskLabel = { generate_sentences: '今日长句', generate_article: '今日短文', lookup_word: '单词查询' }[timing.task] || timing.task;
+  const wordCounts = timing.initialWordCount == null || timing.finalWordCount == null
+    ? ''
+    : `<br>首次词数：${timing.initialWordCount}<br>最终词数：${timing.finalWordCount}`;
+  return `${connection}<br><span class="micro-label">最近请求：${esc(taskLabel)}<br>总耗时：${(timing.totalMs / 1000).toFixed(1)} 秒<br>Provider：${(timing.providerTotalMs / 1000).toFixed(1)} 秒<br>Provider 调用：${timing.providerCalls} 次<br>网络重试：${timing.networkRetries} 次<br>长度重写：${timing.lengthRewrite ? '是' : '否'}${wordCounts}</span>`;
+}
+
+function rememberAiTiming(task, response, started) {
+  const ended = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const timing = response.timing || {};
+  state.ai.requestTiming = {
+    task,
+    totalMs: Math.max(0, ended - started),
+    providerTotalMs: Math.max(0, Number(timing.providerTotalMs ?? timing.providerMs) || 0),
+    providerCalls: Math.max(1, Number(timing.providerCalls ?? timing.attempts) || 1),
+    networkRetries: Math.max(0, Number(timing.networkRetries) || 0),
+    lengthRewrite: timing.lengthRewrite === true,
+    initialWordCount: timing.initialWordCount == null ? null : Math.max(0, Number(timing.initialWordCount) || 0),
+    finalWordCount: timing.finalWordCount == null ? null : Math.max(0, Number(timing.finalWordCount) || 0),
+  };
 }
 
 function refreshAiServiceStatus() {
@@ -1938,7 +1957,9 @@ async function generateAi(type) {
     const task = article ? 'generate_article' : 'generate_sentences';
     const context = aiContext(state.ai.targets, article ? { topic: state.ai.topic, difficulty: state.ai.difficulty } : {});
     const request = FlashAiLearning.buildAiRequest(task, context, article ? { wordRange: [200, 300] } : { count: 1 });
+    const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
     const result = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    rememberAiTiming(task, result, started);
     state.ai.preview = { type, data: result.data, usage: result.usage };
     state.ai.service = { provider: result.provider, model: result.model };
     const usedTargets = article ? result.data.targetWordsUsed : result.data.sentences[0]?.targetWordsUsed;
@@ -2256,13 +2277,9 @@ async function lookupAiSentenceWord(word, sentence) {
   try {
     const request = FlashAiLearning.buildLookupWordRequest(word, sentence);
     const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
-    const ended = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
     state.ai.lookupCache.set(cacheKey, response.data);
     state.ai.service = { provider: response.provider, model: response.model };
-    state.ai.lookupTiming = {
-      totalMs: Math.max(0, ended - started),
-      providerMs: Math.max(0, Number(response.timing?.providerMs) || 0),
-    };
+    rememberAiTiming('lookup_word', response, started);
     refreshAiServiceStatus();
     openAiSentenceWord(word, sentence);
   } catch (err) {
