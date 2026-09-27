@@ -36,6 +36,38 @@ test('health returns provider and model without keys', async () => { const { han
 test('provider and model come from Worker configuration', async () => { const { handleRequest } = await load('index.js'); const custom = { ...env, AI_MODEL: 'configured-model' }; const response = await handleRequest(new Request('https://worker.example/health', { headers: { Authorization: 'Bearer app-test' } }), custom); assert.equal((await response.json()).model, 'configured-model'); });
 test('Zhipu adapter uses Bearer API authentication', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); let init; await createZhipuProvider(env, async (_url, options) => { init = options; return (await upstream('{}'))(); }).generate({ messages: [] }); assert.equal(init.headers.Authorization, 'Bearer test-only'); });
 test('Zhipu adapter uses configured model and non-streaming mode', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); let payload; await createZhipuProvider(env, async (_url, options) => { payload = JSON.parse(options.body); return (await upstream('{}'))(); }).generate({ messages: [] }); assert.equal(payload.model, 'glm-4.5-air'); assert.equal(payload.stream, false); });
+test('lookup_word prefers AI_LOOKUP_MODEL and falls back to AI_MODEL', async () => {
+  const { generationOptions } = await load('index.js');
+  assert.equal(generationOptions('lookup_word', { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' }).model, 'fast-lookup-model');
+  assert.equal(generationOptions('lookup_word', env).model, env.AI_MODEL);
+});
+test('lookup model selection does not affect generation tasks', async () => {
+  const { generationOptions } = await load('index.js');
+  const configured = { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' };
+  assert.equal(generationOptions('generate_sentences', configured).model, env.AI_MODEL);
+  assert.equal(generationOptions('generate_article', configured).model, env.AI_MODEL);
+});
+test('lookup_word uses a low stable-output budget and disables Zhipu thinking', async () => {
+  const { createZhipuProvider } = await load('providers/zhipu.js');
+  const { generationOptions } = await load('index.js');
+  let payload;
+  const options = generationOptions('lookup_word', { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' });
+  await createZhipuProvider(env, async (_url, init) => { payload = JSON.parse(init.body); return (await upstream('{}'))(); }).generate({ messages: [], ...options });
+  assert.equal(payload.model, 'fast-lookup-model');
+  assert.equal(payload.max_tokens, 240);
+  assert.equal(payload.temperature, 0.1);
+  assert.deepEqual(payload.thinking, { type: 'disabled' });
+});
+test('generation tasks keep their existing unrestricted Zhipu request settings', async () => {
+  const { createZhipuProvider } = await load('providers/zhipu.js');
+  const { generationOptions } = await load('index.js');
+  let payload;
+  await createZhipuProvider(env, async (_url, init) => { payload = JSON.parse(init.body); return (await upstream('{}'))(); }).generate({ messages: [], ...generationOptions('generate_sentences', { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' }) });
+  assert.equal(payload.model, env.AI_MODEL);
+  assert.equal('max_tokens' in payload, false);
+  assert.equal('temperature' in payload, false);
+  assert.equal('thinking' in payload, false);
+});
 test('reasoning_content is never returned by adapter', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); const result = await createZhipuProvider(env, upstream('{}')).generate({ messages: [] }); assert.equal('reasoning_content' in result, false); });
 test('upstream 401 maps to safe error', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 401)); const body = await r.json(); assert.equal(body.error.code, 'UPSTREAM_ERROR'); assert.doesNotMatch(JSON.stringify(body), /secret/); });
 test('upstream 429 maps to RATE_LIMITED', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 429)); assert.equal((await r.json()).error.code, 'RATE_LIMITED'); });
@@ -45,6 +77,19 @@ test('invalid model output retries only once then fails safely', async () => { c
 test('valid sentence generation returns one standardized response', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData))); const body = await r.json(); assert.equal(body.ok, true); assert.equal(body.task, 'generate_sentences'); assert.equal(body.data.sentences.length, 1); });
 test('valid article generation returns standardized response', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_article'), env, upstream(JSON.stringify(articleData))); assert.equal((await r.json()).data.title, articleData.title); });
 test('valid lookup_word generation returns the standard provider-neutral response', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }), env, upstream(JSON.stringify(lookupData))); const body = await r.json(); assert.equal(body.ok, true); assert.equal(body.task, 'lookup_word'); assert.deepEqual(body.data, lookupData); });
+test('lookup_word response reports safe provider timing and selected lookup model', async () => {
+  const { handleRequest } = await load('index.js');
+  const moments = [1000, 1175];
+  const r = await handleRequest(
+    request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }),
+    { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' },
+    upstream(JSON.stringify(lookupData)), undefined, () => moments.shift(),
+  );
+  const body = await r.json();
+  assert.equal(body.model, 'fast-lookup-model');
+  assert.deepEqual(body.timing, { providerMs: 175 });
+  assert.doesNotMatch(JSON.stringify(body.timing), /test-only|app-test|ZHIPU|TOKEN|KEY/i);
+});
 test('invalid lookup_word model output retries once then returns INVALID_AI_OUTPUT', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }), env, async () => { calls += 1; return (await upstream(JSON.stringify({ ...lookupData, meaningZh: '' })))(); }); assert.equal(calls, 2); assert.equal((await r.json()).error.code, 'INVALID_AI_OUTPUT'); });
 test('usage is mapped to provider-neutral names', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData))); assert.deepEqual((await r.json()).usage, { inputTokens: 12, outputTokens: 8, totalTokens: 20 }); });
 test('request cannot override provider configuration', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences', { provider: 'evil' }), env, upstream('{}')); assert.equal((await r.json()).error.code, 'INVALID_REQUEST'); });

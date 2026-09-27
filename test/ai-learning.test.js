@@ -137,6 +137,18 @@ test('existing Word or form match bypasses lookup_word', () => {
   assert.match(section, /await lookupAiSentenceWord/);
 });
 test('lookup_word session cache is checked before the AI request', () => assert.match(appSource, /if \(state\.ai\.lookupCache\.has\(cacheKey\)\) return openAiSentenceWord/));
+test('lookup_word measures total latency only after a cache miss', () => {
+  const section = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));
+  assert.ok(section.indexOf('lookupCache.has(cacheKey)') < section.indexOf('const started ='));
+  assert.match(section, /response\.timing\?\.providerMs/);
+  assert.match(section, /totalMs: Math\.max/);
+});
+test('AI service diagnostics display lookup total and provider timing without credentials', () => {
+  const section = appSource.slice(appSource.indexOf('function aiServiceStatusHtml'), appSource.indexOf('function refreshAiServiceStatus'));
+  assert.match(section, /lookup_word：总耗时/);
+  assert.match(section, /Provider/);
+  assert.doesNotMatch(section, /aiSettings\.token|Authorization|API_KEY/);
+});
 test('lookup shows an immediate loading state in the current dialog', () => {
   const section = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));
   assert.match(section, /openAiSentenceWord\(word, sentence, \{ loading: true \}\)/);

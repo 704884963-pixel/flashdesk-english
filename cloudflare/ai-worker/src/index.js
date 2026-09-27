@@ -18,7 +18,19 @@ const reply = (body, status, origin, env) => { const headers = cors(origin, env)
 const failure = (code, message, status, origin, env) => reply({ ok: false, error: { code, message } }, status, origin, env);
 const authorized = (request, env) => request.headers.get('Authorization') === `Bearer ${env.FLASHDESK_AI_TOKEN}`;
 
-export async function handleRequest(request, env, fetchImpl = fetch, pronunciationProviderFactory = createPronunciationProvider) {
+export function generationOptions(task, env) {
+  if (task === 'lookup_word') {
+    return {
+      model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
+      maxOutputTokens: 240,
+      temperature: 0.1,
+      reasoning: false,
+    };
+  }
+  return { model: env.AI_MODEL };
+}
+
+export async function handleRequest(request, env, fetchImpl = fetch, pronunciationProviderFactory = createPronunciationProvider, now = Date.now) {
   const url = new URL(request.url); const origin = request.headers.get('Origin') || '';
   if (origin && !allowedOrigins(env).has(origin)) return failure('UNAUTHORIZED', 'Origin not allowed', 403, '', env);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin, env) });
@@ -62,14 +74,25 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
   let provider;
   try { provider = createProvider(env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env); }
   try {
-    let generated = await provider.generate({ messages, task: input.task, options: input.options });
+    const generation = generationOptions(input.task, env);
+    let providerMs = 0;
+    const generate = async (requestMessages) => {
+      const started = now();
+      try { return await provider.generate({ messages: requestMessages, task: input.task, options: input.options, ...generation }); }
+      finally { providerMs += Math.max(0, now() - started); }
+    };
+    let generated = await generate(messages);
     let data;
     try { data = parseAiOutput(input.task, generated.content); }
     catch {
-      generated = await provider.generate({ messages: [...messages, { role: 'user', content: 'Your previous output was invalid. Return only valid JSON matching the requested schema.' }], task: input.task, options: input.options });
+      generated = await generate([...messages, { role: 'user', content: 'Your previous output was invalid. Return only valid JSON matching the requested schema.' }]);
       try { data = parseAiOutput(input.task, generated.content); } catch { return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env); }
     }
-    return reply({ ok: true, task: input.task, provider: env.AI_PROVIDER, model: env.AI_MODEL, data, usage: generated.usage }, 200, origin, env);
+    return reply({
+      ok: true, task: input.task, provider: env.AI_PROVIDER, model: generation.model,
+      data, usage: generated.usage,
+      ...(input.task === 'lookup_word' ? { timing: { providerMs } } : {}),
+    }, 200, origin, env);
   } catch (error) {
     if (error?.name === 'AbortError') return failure('TIMEOUT', 'AI 请求超时', 504, origin, env);
     if (error?.status === 429) return failure('RATE_LIMITED', '请求过于频繁', 429, origin, env);

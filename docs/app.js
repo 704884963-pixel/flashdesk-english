@@ -26,7 +26,7 @@ const state = {
   ai: {
     mode: 'home', loading: false, error: '', preview: null, targets: [],
     revealed: new Set(), service: null, topic: 'auto', difficulty: 'medium',
-    lookupCache: new Map(),
+    lookupCache: new Map(), lookupTiming: null,
   },
 };
 
@@ -1885,8 +1885,20 @@ function aiSettingsHtml() {
       <label class="field"><span class="micro-label">访问 Token</span><input id="ai-token" type="password" value="${esc(aiSettings.token)}" autocomplete="off"></label>
     </div>
     <div class="form-actions"><button type="button" class="btn" data-ai-save-settings>保存</button><button type="button" class="btn" data-ai-test>测试连接</button></div>
-    <p class="ai-service-status" id="ai-service-status">${service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接'}</p>
+    <p class="ai-service-status" id="ai-service-status">${aiServiceStatusHtml(service)}</p>
   </details>`;
+}
+
+function aiServiceStatusHtml(service = state.ai.service) {
+  const connection = service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接';
+  const timing = state.ai.lookupTiming;
+  if (!timing) return connection;
+  return `${connection}<br><span class="micro-label">lookup_word：总耗时 ${(timing.totalMs / 1000).toFixed(1)} 秒 · Provider ${(timing.providerMs / 1000).toFixed(1)} 秒</span>`;
+}
+
+function refreshAiServiceStatus() {
+  const element = $('#ai-service-status');
+  if (element) element.innerHTML = aiServiceStatusHtml();
 }
 
 function renderAiHome() {
@@ -2263,11 +2275,18 @@ async function lookupAiSentenceWord(word, sentence) {
   const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
   if (state.ai.lookupCache.has(cacheKey)) return openAiSentenceWord(word, sentence);
   openAiSentenceWord(word, sentence, { loading: true });
+  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   try {
     const request = FlashAiLearning.buildLookupWordRequest(word, sentence);
     const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    const ended = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
     state.ai.lookupCache.set(cacheKey, response.data);
     state.ai.service = { provider: response.provider, model: response.model };
+    state.ai.lookupTiming = {
+      totalMs: Math.max(0, ended - started),
+      providerMs: Math.max(0, Number(response.timing?.providerMs) || 0),
+    };
+    refreshAiServiceStatus();
     openAiSentenceWord(word, sentence);
   } catch (err) {
     openAiSentenceWord(word, sentence, { error: err.message });

@@ -3,7 +3,7 @@
 This Worker is separate from the TTS Worker and keeps provider credentials off the client.
 
 1. Log in to Cloudflare with Wrangler.
-2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_PROVIDER` and `AI_MODEL`.
+2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_PROVIDER` and `AI_MODEL`. Optionally set `AI_LOOKUP_MODEL` to a faster compatible model; when omitted, word lookup uses `AI_MODEL`.
 3. Add `ZHIPU_API_KEY` with `wrangler secret put ZHIPU_API_KEY`.
 4. Add the app access token with `wrangler secret put FLASHDESK_AI_TOKEN`.
 5. Deploy with Wrangler.
