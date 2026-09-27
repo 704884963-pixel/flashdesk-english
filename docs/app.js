@@ -9,6 +9,11 @@ const state = {
   view: 'review',
   session: null,
   quiz: null,
+  wordLibrary: {
+    query: '',
+    filter: 'all',
+    selectedId: null,
+  },
 };
 
 function freshSession() {
@@ -66,8 +71,8 @@ function wordBackHtml(card) {
     ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   return `<div class="word-back">
     ${details.wordNumber === null ? '' : `<div class="micro-label">#${details.wordNumber}</div>`}
-    ${section('🧠 好记读法', details.memoryReading)}
-    ${section('🗣 简单中文读法', details.chineseReading)}
+    ${section('🧠 发音拆解', details.memoryReading)}
+    ${section('🗣 中文近似', details.chineseReading)}
     ${section('🇨🇳 中文意思', card.back)}
     ${section('词形变化', details.forms.join(' / '))}
   </div>`;
@@ -463,6 +468,85 @@ function fmtRelative(due) {
   const d = Math.round(h / 24);
   if (d < 60) return `${d} 天后`;
   return `${Math.round(d / 30)} 个月后`;
+}
+
+const WORD_LIBRARY_FILTERS = ['all', 'due', 'new', 'lapsed', 'mastered'];
+const WORD_LIBRARY_LABELS = {
+  all: '全部',
+  due: '待复习',
+  new: '新词',
+  lapsed: '易错',
+  mastered: '已掌握',
+};
+
+function wordLibraryMatches(card, filter, now = Date.now()) {
+  if (card.deck !== 'Words') return false;
+  if (filter === 'due') return Number(card.due) <= now;
+  if (filter === 'new') return Number(card.streak || 0) === 0 && Number(card.lapses || 0) === 0;
+  if (filter === 'lapsed') return Number(card.lapses || 0) > 0;
+  if (filter === 'mastered') return Number(card.streak || 0) >= 3 && Number(card.lapses || 0) === 0;
+  return true;
+}
+
+function wordLibrarySearchMatches(card, query) {
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  if (!needle) return true;
+  const number = wordDetails(card).wordNumber;
+  return String(card.front || '').toLocaleLowerCase().includes(needle)
+    || String(card.back || '').toLocaleLowerCase().includes(needle)
+    || (number !== null && String(number).includes(needle.replace(/^#/, '')));
+}
+
+function compareWordNumbersNewest(a, b) {
+  const numberA = wordDetails(a).wordNumber;
+  const numberB = wordDetails(b).wordNumber;
+  if (numberA !== null && numberB !== null && numberA !== numberB) return numberB - numberA;
+  if (numberA !== null) return -1;
+  if (numberB !== null) return 1;
+  const createdDiff = Number(b.created || 0) - Number(a.created || 0);
+  return createdDiff || String(a.front || '').localeCompare(String(b.front || ''), 'en');
+}
+
+function wordLibraryCards(cards, { query = '', filter = 'all', now = Date.now() } = {}) {
+  const normalizedFilter = WORD_LIBRARY_FILTERS.includes(filter) ? filter : 'all';
+  const result = cards
+    .filter((card) => wordLibraryMatches(card, normalizedFilter, now))
+    .filter((card) => wordLibrarySearchMatches(card, query));
+  return result.sort((a, b) => {
+    if (normalizedFilter === 'due') return Number(a.due) - Number(b.due) || compareWordNumbersNewest(a, b);
+    if (normalizedFilter === 'lapsed') return Number(b.lapses || 0) - Number(a.lapses || 0) || compareWordNumbersNewest(a, b);
+    return compareWordNumbersNewest(a, b);
+  });
+}
+
+function wordLibraryStats(cards, now = Date.now()) {
+  const words = cards.filter((card) => card.deck === 'Words');
+  return Object.fromEntries(WORD_LIBRARY_FILTERS.map((filter) => [
+    filter,
+    words.filter((card) => wordLibraryMatches(card, filter, now)).length,
+  ]));
+}
+
+function formatWordDue(due, now = Date.now()) {
+  const value = Number(due);
+  if (!Number.isFinite(value)) return '未安排';
+  const today = new Date(now);
+  const target = new Date(value);
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  const days = Math.round((targetStart - todayStart) / 86400000);
+  if (days < 0) return '已逾期';
+  if (days === 0) return '今天';
+  if (days === 1) return '明天';
+  return `${days}天后`;
+}
+
+function wordLearningStatus(card, now = Date.now()) {
+  if (Number(card.lapses || 0) > 0) return { key: 'lapsed', label: '易错' };
+  if (Number(card.streak || 0) >= 3) return { key: 'mastered', label: '已掌握' };
+  if (Number(card.due) <= now) return { key: 'due', label: '待复习' };
+  if (Number(card.streak || 0) === 0) return { key: 'new', label: '新词' };
+  return { key: 'learning', label: '学习中' };
 }
 
 let toastTimer;
@@ -955,6 +1039,166 @@ function renderQuiz() {
     </div>`;
 }
 
+/* ---------- Word Library ---------- */
+
+function wordSpeechButtons(card) {
+  const id = esc(card.id);
+  return `<div class="word-speech-actions">
+    <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="1"
+      aria-label="正常朗读 ${esc(card.front)}">🔊 正常</button>
+    <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="0.75"
+      aria-label="慢速朗读 ${esc(card.front)}">🐢 慢速</button>
+  </div>`;
+}
+
+function wordListItemHtml(card, now = Date.now()) {
+  const details = wordDetails(card);
+  const number = details.wordNumber === null ? '#未编号' : `#${details.wordNumber}`;
+  const status = wordLearningStatus(card, now);
+  return `<article class="word-list-item" data-word-card="${esc(card.id)}">
+    <button type="button" class="word-list-main" data-word-open="${esc(card.id)}">
+      <span class="word-list-heading"><span class="word-number">${number}</span><strong>${esc(card.front)}</strong></span>
+      <span class="word-list-meaning">${esc(card.back)}</span>
+      <span class="word-list-meta">
+        <span class="word-list-meta-main">${details.forms.length ? `<span class="word-list-forms">${esc(details.forms.join(' · '))}</span><span aria-hidden="true"> · </span>` : ''}<span class="word-status word-status-${status.key}">● ${status.label}</span></span>
+        <span class="word-list-due">· ${formatWordDue(card.due, now)}</span>
+      </span>
+    </button>
+    ${wordSpeechButtons(card)}
+  </article>`;
+}
+
+function wordDetailHtml(card, now = Date.now()) {
+  const details = wordDetails(card);
+  const number = details.wordNumber === null ? '未编号' : `#${details.wordNumber}`;
+  const optionalSection = (label, value) => value
+    ? `<section class="word-detail-section"><div class="micro-label">${label}</div><div>${esc(value)}</div></section>`
+    : '';
+  return `<div class="word-library-detail">
+    <button type="button" class="word-library-back" data-word-back>← 返回单词库</button>
+    <article class="panel word-detail-card">
+      <div class="word-detail-number">${number}</div>
+      <div class="word-detail-title-row">
+        <h2>${esc(card.front)}</h2>
+        ${wordSpeechButtons(card)}
+      </div>
+      <div class="word-detail-meaning">${esc(card.back)}</div>
+      <div class="word-detail-sections">
+        ${optionalSection('🧠 发音拆解', details.memoryReading)}
+        ${optionalSection('🗣 中文近似', details.chineseReading)}
+        ${details.memoryReading || details.chineseReading ? '<p class="pronunciation-note">中文仅作近似提示，标准发音以音频为准。</p>' : ''}
+        <section class="word-detail-section"><div class="micro-label">词形变化</div><div class="${details.forms.length ? '' : 'muted'}">${details.forms.length ? esc(details.forms.join(' · ')) : '暂无'}</div></section>
+      </div>
+      <section class="word-study-panel">
+        <div class="micro-label">学习状态</div>
+        <dl>
+          <div><dt>当前状态</dt><dd>${wordLearningStatus(card, now).label}</dd></div>
+          <div><dt>连续答对</dt><dd>${Number(card.streak || 0)}</dd></div>
+          <div><dt>错误次数</dt><dd>${Number(card.lapses || 0)}</dd></div>
+          <div><dt>下次复习</dt><dd>${formatWordDue(card.due, now)}</dd></div>
+        </dl>
+      </section>
+      <div class="word-detail-actions">
+        <button type="button" class="btn btn-primary" data-word-review>开始复习</button>
+        <button type="button" class="btn" data-word-edit="${esc(card.id)}">编辑</button>
+      </div>
+    </article>
+  </div>`;
+}
+
+function renderWordLibrary() {
+  const root = $('#word-library');
+  if (!root) return;
+  const selected = state.wordLibrary.selectedId
+    ? state.cards.find((card) => card.id === state.wordLibrary.selectedId && card.deck === 'Words')
+    : null;
+  if (selected) {
+    root.innerHTML = wordDetailHtml(selected);
+    return;
+  }
+  state.wordLibrary.selectedId = null;
+  const stats = wordLibraryStats(state.cards);
+  const cards = wordLibraryCards(state.cards, state.wordLibrary);
+  const summary = state.wordLibrary.query
+    ? `搜索结果 · ${cards.length} 个单词`
+    : state.wordLibrary.filter === 'all'
+      ? `${stats.all} 个单词`
+      : `${WORD_LIBRARY_LABELS[state.wordLibrary.filter]} · ${cards.length} 个单词`;
+  root.innerHTML = `<div class="word-library-home">
+    <header class="word-library-header">
+      <h2>单词库</h2>
+      <div class="word-library-summary">${esc(summary)}</div>
+    </header>
+    <div class="word-library-tools">
+      <label class="word-search"><span aria-hidden="true">🔍</span><input id="word-search" type="search" value="${esc(state.wordLibrary.query)}" placeholder="搜索单词、中文或编号" autocomplete="off"></label>
+      <div class="word-filter-chips" role="group" aria-label="单词状态筛选">
+        ${WORD_LIBRARY_FILTERS.map((filter) => `<button type="button" class="word-filter-chip${state.wordLibrary.filter === filter ? ' active' : ''}" data-word-filter="${filter}">${WORD_LIBRARY_LABELS[filter]} <span>${stats[filter]}</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="word-list">
+      ${cards.length ? cards.map((card) => wordListItemHtml(card)).join('') : '<div class="panel empty-panel"><p>没有找到符合条件的单词。</p></div>'}
+    </div>
+  </div>`;
+}
+
+function openEditDialog(card) {
+  const form = $('#edit-form');
+  form.dataset.cardId = card.id;
+  form.dataset.returnView = state.view;
+  $('#edit-front').value = card.front;
+  $('#edit-back').value = card.back;
+  const isWord = card.deck === 'Words';
+  const details = wordDetails(card);
+  form.querySelectorAll('[data-edit-word]').forEach((field) => { field.hidden = !isWord; });
+  $('#edit-number').textContent = details.wordNumber === null ? '未编号' : `#${details.wordNumber}`;
+  $('#edit-front-label').textContent = isWord ? '英文单词' : '英文';
+  $('#edit-back-label').textContent = isWord ? '中文意思' : '中文 / 学习备注';
+  $('#edit-memory-reading').value = details.memoryReading;
+  $('#edit-chinese-reading').value = details.chineseReading;
+  $('#edit-forms').value = details.forms.join('\n');
+  $('#edit-dialog').showModal();
+  $('#edit-front').focus();
+}
+
+function handleWordLibraryClick(e) {
+  const speech = e.target.closest('[data-word-speak]');
+  if (speech) {
+    e.preventDefault();
+    e.stopPropagation();
+    const card = state.cards.find((item) => item.id === speech.dataset.wordSpeak && item.deck === 'Words');
+    if (card) playEnglish(card.front, { rate: Number(speech.dataset.speakRate), button: speech });
+    return;
+  }
+  const filter = e.target.closest('[data-word-filter]');
+  if (filter) {
+    state.wordLibrary.filter = WORD_LIBRARY_FILTERS.includes(filter.dataset.wordFilter) ? filter.dataset.wordFilter : 'all';
+    renderWordLibrary();
+    return;
+  }
+  const open = e.target.closest('[data-word-open]');
+  if (open) {
+    state.wordLibrary.selectedId = open.dataset.wordOpen;
+    renderWordLibrary();
+    return;
+  }
+  if (e.target.closest('[data-word-back]')) {
+    state.wordLibrary.selectedId = null;
+    renderWordLibrary();
+    return;
+  }
+  const edit = e.target.closest('[data-word-edit]');
+  if (edit) {
+    const card = state.cards.find((item) => item.id === edit.dataset.wordEdit && item.deck === 'Words');
+    if (card) openEditDialog(card);
+    return;
+  }
+  if (e.target.closest('[data-word-review]')) {
+    state.deckFilter = 'Words';
+    renderDeckControls();
+    switchView('review');
+  }
+}
+
 /* ---------- browse ---------- */
 
 function renderBrowse() {
@@ -1010,7 +1254,7 @@ function switchView(name) {
   stopEnglishPlayback();
   state.view = name;
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('btn-active', b.dataset.view === name));
-  for (const v of ['review', 'quiz', 'add', 'browse']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['review', 'quiz', 'add', 'words', 'browse']) $(`#view-${v}`).hidden = v !== name;
   if (name === 'review') {
     state.session = freshSession();
     buildQueue();
@@ -1021,6 +1265,8 @@ function switchView(name) {
   } else if (name === 'browse') {
     renderBrowse();
     if (FlashStore.exportData) $('#data-panel').hidden = false;
+  } else if (name === 'words') {
+    renderWordLibrary();
   } else if (name === 'add') {
     updateAddForm();
     $('#add-front').focus();
@@ -1031,7 +1277,10 @@ function switchView(name) {
 
 function bindEvents() {
   document.querySelectorAll('.tab').forEach((b) =>
-    b.addEventListener('click', () => switchView(b.dataset.view)));
+    b.addEventListener('click', () => {
+      if (b.dataset.view === 'words') state.wordLibrary.selectedId = null;
+      switchView(b.dataset.view);
+    }));
 
   $('#deck-filter').addEventListener('change', (e) => {
     state.deckFilter = e.target.value;
@@ -1201,26 +1450,30 @@ function bindEvents() {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('#add-form').requestSubmit();
   });
 
+  $('#word-library').addEventListener('input', (e) => {
+    if (e.target.id !== 'word-search') return;
+    state.wordLibrary.query = e.target.value;
+    if (e.isComposing) return;
+    renderWordLibrary();
+    const search = $('#word-search');
+    search.focus();
+    search.setSelectionRange(search.value.length, search.value.length);
+  });
+
+  $('#word-library').addEventListener('compositionend', (e) => {
+    if (e.target.id !== 'word-search') return;
+    state.wordLibrary.query = e.target.value;
+    renderWordLibrary();
+  });
+
+  $('#word-library').addEventListener('click', handleWordLibraryClick);
+
   $('#browse-table').addEventListener('click', async (e) => {
     const edit = e.target.closest('[data-edit]');
     if (edit) {
       const card = state.cards.find((c) => c.id === edit.dataset.edit);
       if (!card) return;
-      const form = $('#edit-form');
-      form.dataset.cardId = card.id;
-      $('#edit-front').value = card.front;
-      $('#edit-back').value = card.back;
-      const isWord = card.deck === 'Words';
-      const details = wordDetails(card);
-      form.querySelectorAll('[data-edit-word]').forEach((field) => { field.hidden = !isWord; });
-      $('#edit-number').textContent = details.wordNumber === null ? '未编号' : `#${details.wordNumber}`;
-      $('#edit-front-label').textContent = isWord ? '英文单词' : '英文';
-      $('#edit-back-label').textContent = isWord ? '中文意思' : '中文 / 学习备注';
-      $('#edit-memory-reading').value = details.memoryReading;
-      $('#edit-chinese-reading').value = details.chineseReading;
-      $('#edit-forms').value = details.forms.join('\n');
-      $('#edit-dialog').showModal();
-      $('#edit-front').focus();
+      openEditDialog(card);
       return;
     }
     const btn = e.target.closest('[data-del]');
@@ -1270,7 +1523,8 @@ function bindEvents() {
       const { card } = await FlashStore.updateCard(id, fields);
       const index = state.cards.findIndex((c) => c.id === card.id);
       if (index !== -1) state.cards[index] = card;
-      renderBrowse();
+      if (form.dataset.returnView === 'words') renderWordLibrary();
+      else renderBrowse();
       // A body-level toast would be behind the modal; restore it before closing.
       document.body.appendChild($('#toast'));
       $('#edit-dialog').close();

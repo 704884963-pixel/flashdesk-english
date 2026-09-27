@@ -24,7 +24,8 @@
         <button class="btn tab" data-view="review">复习</button>
         <button class="btn tab" data-view="quiz">测验</button>
         <button class="btn tab" data-view="add">新增</button>
-        <button class="btn tab" data-view="browse">词库</button>
+        <button class="btn tab" data-view="words">单词库</button>
+        <button class="btn tab" data-view="browse">浏览</button>
         <label class="deck-filter">
           <span class="micro-label">分类</span>
           <select id="deck-filter"></select>
@@ -108,13 +109,14 @@
           <textarea id="add-front" rows="3" placeholder="例如：apple" required></textarea>
         </label>
         <label class="field" data-word-field>
-          <span class="micro-label">好记读法</span>
-          <input id="add-memory-reading" placeholder="例如：ex（伊克斯）+ pect（佩克特）">
+          <span class="micro-label">🧠 发音拆解</span>
+          <input id="add-memory-reading" placeholder="例如：tr（t+r 快速连读） + ain（诶+n）">
         </label>
         <label class="field" data-word-field>
-          <span class="micro-label">简单中文读法</span>
-          <input id="add-chinese-reading" placeholder="例如：伊克斯-佩克特">
+          <span class="micro-label">🗣 中文近似</span>
+          <input id="add-chinese-reading" placeholder="例如：接近“垂恩”，压成一个音节">
         </label>
+        <p class="pronunciation-note" data-word-field>中文仅作近似提示，标准发音以音频为准。</p>
         <label class="field">
           <span class="micro-label" id="add-back-label">中文意思</span>
           <textarea id="add-back" rows="3" placeholder="例如：苹果；可填写用法备注" required></textarea>
@@ -128,6 +130,10 @@
           <span id="add-flash" class="micro-label flash" hidden>已添加 ✓</span>
         </div>
       </form>
+    </section>
+
+    <section id="view-words" hidden>
+      <div id="word-library"></div>
     </section>
 
     <section id="view-browse" hidden>
@@ -175,13 +181,14 @@
         <textarea id="edit-front" rows="4" required></textarea>
       </label>
       <label class="field" data-edit-word hidden>
-        <span class="micro-label">好记读法</span>
-        <input id="edit-memory-reading">
+        <span class="micro-label">🧠 发音拆解</span>
+        <input id="edit-memory-reading" placeholder="例如：tr（t+r 快速连读） + ain（诶+n）">
       </label>
       <label class="field" data-edit-word hidden>
-        <span class="micro-label">简单中文读法</span>
-        <input id="edit-chinese-reading">
+        <span class="micro-label">🗣 中文近似</span>
+        <input id="edit-chinese-reading" placeholder="例如：接近“垂恩”，压成一个音节">
       </label>
+      <p class="pronunciation-note" data-edit-word hidden>中文仅作近似提示，标准发音以音频为准。</p>
       <label class="field">
         <span class="micro-label" id="edit-back-label">中文 / 学习备注</span>
         <textarea id="edit-back" rows="4" required></textarea>

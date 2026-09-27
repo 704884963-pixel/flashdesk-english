@@ -41,7 +41,7 @@ test('Word back shows ordered escaped details while front contains no answer', (
   const front = html.split('class="card-face face-front"')[1].split('class="card-face face-back"')[0];
   assert.doesNotMatch(front, /苹果|读法|hint|expected/);
   const back = h.run('wordBackHtml(cards[0])');
-  const labels = ['#138', '🧠 好记读法', '🗣 简单中文读法', '🇨🇳 中文意思', '词形变化'];
+  const labels = ['#138', '🧠 发音拆解', '🗣 中文近似', '🇨🇳 中文意思', '词形变化'];
   assert.deepEqual(labels.map((label) => back.indexOf(label)), labels.map((label) => back.indexOf(label)).sort((a, b) => a - b));
   assert.match(back, /&lt;hint&gt;/);
   assert.doesNotMatch(back, /<hint>/);

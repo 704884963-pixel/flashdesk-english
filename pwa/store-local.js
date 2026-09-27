@@ -88,7 +88,7 @@
     const memoryReading = fields.memoryReading === undefined ? '' : fields.memoryReading;
     const chineseReading = fields.chineseReading === undefined ? '' : fields.chineseReading;
     if (typeof memoryReading !== 'string' || typeof chineseReading !== 'string') {
-      throw new Error('好记读法和简单中文读法必须是字符串');
+      throw new Error('发音拆解和中文近似必须是字符串');
     }
     const forms = fields.forms === undefined ? [] : fields.forms;
     if (!Array.isArray(forms) || forms.some((form) => typeof form !== 'string')) {
