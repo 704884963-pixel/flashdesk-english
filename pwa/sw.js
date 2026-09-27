@@ -8,6 +8,7 @@ const ASSETS = [
   'index.html',
   'styles.css',
   'app.js',
+  'audio-cache.js',
   'logic.js',
   'store.js',
   'default-data.json',

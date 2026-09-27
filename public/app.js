@@ -269,12 +269,23 @@ function loadTtsSettings() {
 }
 
 const ttsSettings = loadTtsSettings();
+const audioCacheApi = typeof window !== 'undefined' && window.FlashAudioCache
+  ? window.FlashAudioCache
+  : {
+    normalizeText: (value) => String(value || '').trim().replace(/\s+/g, ' '),
+    cacheKey: (endpoint, text) => JSON.stringify(['audio-v1', String(endpoint || '').trim(), String(text || '').trim().replace(/\s+/g, ' ')]),
+    async get() { return null; },
+    async put(record) { return record; },
+    async getAll() { return []; },
+    async clear() {},
+  };
 const ttsAudioCache = new Map();
 const ttsPendingAudio = new Map();
-const ttsVoiceByEndpoint = new Map();
 const loadingSpeechButtons = new Set();
 let currentEnglishAudio = null;
+let currentEnglishObjectUrl = '';
 let englishPlaybackRequest = 0;
+let audioCacheDownloading = false;
 
 function ttsConfigured() {
   return Boolean(ttsSettings.endpoint && ttsSettings.token);
@@ -298,6 +309,7 @@ function renderTtsSettings() {
   endpoint.value = ttsSettings.endpoint;
   token.value = ttsSettings.token;
   setTtsStatus(ttsConfigured() ? '高质量发音已配置。' : '未配置时自动使用系统发音。');
+  refreshAudioCacheStats();
 }
 
 function saveTtsSettingsFromForm() {
@@ -308,6 +320,7 @@ function saveTtsSettingsFromForm() {
     ttsSettings.token = '';
     saveTtsSettings();
     setTtsStatus('已清除高质量发音设置，将使用系统发音。');
+    refreshAudioCacheStats();
     return true;
   }
   const endpoint = normalizeTtsEndpoint(endpointInput);
@@ -320,39 +333,77 @@ function saveTtsSettingsFromForm() {
   saveTtsSettings();
   $('#tts-endpoint').value = endpoint;
   setTtsStatus('高质量发音设置已保存。');
+  refreshAudioCacheStats();
   return true;
 }
 
-function ttsCacheKey(text, voice = ttsVoiceByEndpoint.get(ttsSettings.endpoint) || 'worker-default') {
-  return JSON.stringify([ttsSettings.endpoint, voice, text]);
+function normalizedTtsText(text) {
+  return audioCacheApi.normalizeText(text);
+}
+
+function ttsCacheKey(text, endpoint = ttsSettings.endpoint) {
+  return audioCacheApi.cacheKey(endpoint, normalizedTtsText(text));
 }
 
 function ttsRequestUrl() {
   return `${ttsSettings.endpoint}/tts`;
 }
 
-async function fetchTtsAudio(text) {
-  const key = ttsCacheKey(text);
-  if (ttsAudioCache.has(key)) return ttsAudioCache.get(key);
+function validAudioBlob(blob) {
+  return Boolean(blob && Number(blob.size) > 0 && String(blob.type || '').startsWith('audio/'));
+}
+
+function ttsRequestError(status) {
+  const error = new Error(`TTS request failed (${status})`);
+  error.status = status;
+  return error;
+}
+
+async function fetchTtsAudio(text, options = {}) {
+  const value = normalizedTtsText(text);
+  const endpoint = ttsSettings.endpoint;
+  const key = ttsCacheKey(value, endpoint);
+  if (!value || !endpoint) return null;
+  if (ttsAudioCache.has(key)) return { key, blob: ttsAudioCache.get(key), source: 'memory' };
   if (ttsPendingAudio.has(key)) return ttsPendingAudio.get(key);
 
   const pending = (async () => {
+    try {
+      const stored = await audioCacheApi.get(key);
+      if (stored && validAudioBlob(stored.blob)) {
+        ttsAudioCache.set(key, stored.blob);
+        return { key, blob: stored.blob, source: 'indexeddb' };
+      }
+    } catch { /* IndexedDB may be unavailable; network/system fallback still works. */ }
+
+    const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+    if (options.allowNetwork === false || !online || !ttsConfigured()) return null;
     const response = await fetch(ttsRequestUrl(), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ttsSettings.token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text: value }),
     });
-    if (!response.ok) throw new Error(`TTS request failed (${response.status})`);
-    const voice = response.headers.get('X-FlashDesk-Voice-ID') || 'worker-default';
-    ttsVoiceByEndpoint.set(ttsSettings.endpoint, voice);
+    if (!response.ok) throw ttsRequestError(response.status);
     const blob = await response.blob();
-    if (!blob || !String(blob.type || '').startsWith('audio/')) throw new Error('TTS response is not audio');
-    const objectUrl = URL.createObjectURL(blob);
-    ttsAudioCache.set(ttsCacheKey(text, voice), objectUrl);
-    return objectUrl;
+    if (!validAudioBlob(blob)) throw new Error('TTS response is not audio');
+    ttsAudioCache.set(key, blob);
+    let persisted = false;
+    try {
+      await audioCacheApi.put({
+        key,
+        text: value,
+        blob,
+        mimeType: blob.type || 'audio/mpeg',
+        endpoint,
+        createdAt: Date.now(),
+        size: blob.size,
+      });
+      persisted = true;
+    } catch { /* Playback can continue even when storage is unavailable. */ }
+    return { key, blob, source: 'network', persisted };
   })();
 
   ttsPendingAudio.set(key, pending);
@@ -361,6 +412,30 @@ async function fetchTtsAudio(text) {
   } finally {
     ttsPendingAudio.delete(key);
   }
+}
+
+function releaseCurrentObjectUrl() {
+  if (!currentEnglishObjectUrl) return;
+  try {
+    if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(currentEnglishObjectUrl);
+  } catch { /* URL already released */ }
+  currentEnglishObjectUrl = '';
+}
+
+async function playAudioBlob(blob, rate) {
+  const objectUrl = URL.createObjectURL(blob);
+  currentEnglishObjectUrl = objectUrl;
+  const audio = new Audio(objectUrl);
+  audio.playbackRate = rate;
+  currentEnglishAudio = audio;
+  const release = () => {
+    if (currentEnglishAudio === audio) currentEnglishAudio = null;
+    if (currentEnglishObjectUrl === objectUrl) releaseCurrentObjectUrl();
+  };
+  audio.onended = release;
+  audio.onerror = release;
+  await audio.play();
+  return audio;
 }
 
 function setSpeechButtonLoading(button, loading) {
@@ -383,6 +458,7 @@ function stopEnglishPlayback() {
     try { currentEnglishAudio.pause(); currentEnglishAudio.currentTime = 0; } catch { /* already stopped */ }
     currentEnglishAudio = null;
   }
+  releaseCurrentObjectUrl();
   if (speechSupported()) {
     try { window.speechSynthesis.cancel(); } catch { /* unavailable */ }
   }
@@ -390,25 +466,27 @@ function stopEnglishPlayback() {
 }
 
 async function playEnglish(text, options = {}) {
-  const value = String(text || '').trim();
+  const value = normalizedTtsText(text);
   if (!value) return 'failed';
   const rate = Number(options.rate) === 0.75 ? 0.75 : 1;
   const button = options.button || null;
   stopEnglishPlayback();
   const requestId = englishPlaybackRequest;
 
-  if (ttsConfigured() && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+  if (ttsSettings.endpoint) {
     setSpeechButtonLoading(button, true);
     try {
-      const objectUrl = await fetchTtsAudio(value);
+      const cached = await fetchTtsAudio(value);
       if (requestId !== englishPlaybackRequest) return 'cancelled';
-      const audio = new Audio(objectUrl);
-      audio.playbackRate = rate;
-      currentEnglishAudio = audio;
-      await audio.play();
-      if (requestId !== englishPlaybackRequest) return 'cancelled';
-      setTtsStatus('正在使用 ElevenLabs 高质量发音。');
-      return 'elevenlabs';
+      if (cached) {
+        await playAudioBlob(cached.blob, rate);
+        if (requestId !== englishPlaybackRequest) return 'cancelled';
+        setTtsStatus(cached.source === 'network'
+          ? '正在使用 ElevenLabs 高质量发音。'
+          : '正在播放本机缓存的高质量发音。');
+        if (cached.source === 'network') refreshAudioCacheStats();
+        return 'elevenlabs';
+      }
     } catch {
       if (requestId !== englishPlaybackRequest) return 'cancelled';
       setTtsStatus('高质量发音暂时不可用，已切换到系统发音。', true);
@@ -425,6 +503,190 @@ async function playEnglish(text, options = {}) {
 
 function previewHighQualitySpeech(button) {
   return playEnglish(TTS_SAMPLE, { rate: 1, button });
+}
+
+function formatAudioBytes(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function currentWordPronunciations() {
+  const unique = new Map();
+  state.cards.filter((card) => card.deck === 'Words').forEach((card) => {
+    const text = normalizedTtsText(card.front);
+    if (text && !unique.has(text)) unique.set(text, text);
+  });
+  return [...unique.values()];
+}
+
+async function audioCacheRecords() {
+  try { return (await audioCacheApi.getAll()).filter((record) => validAudioBlob(record.blob)); } catch { return []; }
+}
+
+async function refreshAudioCacheStats() {
+  const wordCount = $('#audio-cache-word-count');
+  const totalNode = $('#audio-cache-total');
+  const sizeNode = $('#audio-cache-size');
+  if (!wordCount || !totalNode || !sizeNode) return null;
+  const records = await audioCacheRecords();
+  const recordKeys = new Set(records.map((record) => record.key));
+  const words = currentWordPronunciations();
+  const cachedWords = ttsSettings.endpoint
+    ? words.filter((text) => recordKeys.has(ttsCacheKey(text))).length : 0;
+  const size = records.reduce((sum, record) => sum + (Number(record.blob?.size) || Number(record.size) || 0), 0);
+  wordCount.textContent = `${cachedWords} / ${words.length}`;
+  totalNode.textContent = `${records.length} 条`;
+  sizeNode.textContent = formatAudioBytes(size);
+  return { cachedWords, words: words.length, total: records.length, size };
+}
+
+function setAudioCacheStatus(message, isError = false) {
+  const node = $('#audio-cache-status');
+  if (!node) return;
+  node.textContent = message;
+  node.classList.toggle('warn', isError);
+}
+
+function renderAudioDownloadProgress(progress) {
+  const wrap = $('#audio-cache-progress-wrap');
+  const bar = $('#audio-cache-progress');
+  const text = $('#audio-cache-progress-text');
+  if (!wrap || !bar || !text) return;
+  wrap.hidden = false;
+  bar.max = Math.max(progress.total, 1);
+  bar.value = progress.processed;
+  text.textContent = `正在下载 ${progress.processed} / ${progress.total} · 成功 ${progress.success} · 跳过 ${progress.skipped} · 失败 ${progress.failed}`;
+}
+
+function waitForRetry(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureWordAudioCached(text) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await fetchTtsAudio(text, { allowNetwork: true });
+      if (!result) throw new Error('Audio unavailable');
+      if (result.source === 'indexeddb' || result.persisted) {
+        return result.source === 'network' ? 'success' : 'skipped';
+      }
+      const existing = await audioCacheApi.get(result.key);
+      if (existing && validAudioBlob(existing.blob)) return 'skipped';
+      await audioCacheApi.put({
+        key: result.key,
+        text: normalizedTtsText(text),
+        blob: result.blob,
+        mimeType: result.blob.type || 'audio/mpeg',
+        endpoint: ttsSettings.endpoint,
+        createdAt: Date.now(),
+        size: result.blob.size,
+      });
+      return 'success';
+    } catch (error) {
+      lastError = error;
+      if (error.status === 401 || error.status === 403) throw error;
+      const retryable = error.status === 429 || Number(error.status) >= 500;
+      if (!retryable || attempt === 2) break;
+      await waitForRetry(400 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error('Audio download failed');
+}
+
+async function requestPersistentStorage() {
+  try {
+    if (navigator.storage && typeof navigator.storage.persist === 'function') {
+      return await navigator.storage.persist();
+    }
+  } catch { /* Browser-managed storage is still usable. */ }
+  return false;
+}
+
+async function downloadMissingWordAudio() {
+  if (audioCacheDownloading) return;
+  const words = currentWordPronunciations();
+  const records = await audioCacheRecords();
+  const cachedKeys = new Set(records.map((record) => record.key));
+  const missing = words.filter((text) => !cachedKeys.has(ttsCacheKey(text)));
+  const progress = { total: words.length, processed: words.length - missing.length, success: 0, skipped: words.length - missing.length, failed: 0 };
+  renderAudioDownloadProgress(progress);
+
+  if (!missing.length) {
+    setAudioCacheStatus('单词发音已全部保存到本机。');
+    await refreshAudioCacheStats();
+    return;
+  }
+  if (!ttsConfigured()) {
+    setAudioCacheStatus('请先配置并保存 Worker 地址和访问 Token。', true);
+    return;
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    setAudioCacheStatus('当前离线；已缓存内容仍可播放，联网后可继续下载缺失发音。', true);
+    return;
+  }
+
+  audioCacheDownloading = true;
+  const downloadButton = $('#audio-cache-download');
+  const clearButton = $('#audio-cache-clear');
+  downloadButton.disabled = true;
+  clearButton.disabled = true;
+  const persistent = await requestPersistentStorage();
+  setAudioCacheStatus(persistent ? '本机持久化存储已启用，正在下载…' : '正在下载；存储空间由浏览器管理。');
+  let cursor = 0;
+  let authError = null;
+
+  async function worker() {
+    while (!authError) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= missing.length) return;
+      try {
+        const outcome = await ensureWordAudioCached(missing[index]);
+        if (outcome === 'success') progress.success += 1;
+        else progress.skipped += 1;
+      } catch (error) {
+        progress.failed += 1;
+        if (error.status === 401 || error.status === 403) authError = error;
+      } finally {
+        progress.processed += 1;
+        renderAudioDownloadProgress(progress);
+      }
+    }
+  }
+
+  try {
+    await Promise.all([worker(), worker()]);
+    if (authError) {
+      setAudioCacheStatus('下载已停止：访问 Token 或 Worker 配置可能有问题。', true);
+    } else if (progress.processed === progress.total && progress.failed === 0) {
+      setAudioCacheStatus('单词发音已全部保存到本机。');
+    } else {
+      setAudioCacheStatus('部分发音下载失败；已保存内容会保留，下次可继续补齐。', true);
+    }
+  } finally {
+    audioCacheDownloading = false;
+    downloadButton.disabled = false;
+    clearButton.disabled = false;
+    await refreshAudioCacheStats();
+  }
+}
+
+async function clearAudioCache() {
+  if (audioCacheDownloading) return;
+  if (!confirm('确定删除本机所有高质量发音缓存吗？\n删除后需要重新联网下载。')) return;
+  try {
+    stopEnglishPlayback();
+    ttsAudioCache.clear();
+    await audioCacheApi.clear();
+    $('#audio-cache-progress-wrap').hidden = true;
+    setAudioCacheStatus('本机发音缓存已清除。');
+    await refreshAudioCacheStats();
+  } catch {
+    setAudioCacheStatus('清除失败，请稍后重试。', true);
+  }
 }
 
 function deckDisplayName(deck) {
@@ -1311,6 +1573,14 @@ function bindEvents() {
     if (saveTtsSettingsFromForm()) previewHighQualitySpeech(e.currentTarget);
   });
 
+  $('#audio-cache-download').addEventListener('click', () => {
+    downloadMissingWordAudio();
+  });
+
+  $('#audio-cache-clear').addEventListener('click', () => {
+    clearAudioCache();
+  });
+
   $('#dir-switch').addEventListener('click', (e) => {
     const b = e.target.closest('[data-dir]');
     if (!b || b.dataset.dir === state.direction) return;
@@ -1590,6 +1860,7 @@ async function init() {
     $('#view-review').hidden = false;
     return;
   }
+  await refreshAudioCacheStats();
   renderDeckControls();
   switchView('review');
 }

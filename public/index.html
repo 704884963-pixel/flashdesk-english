@@ -59,6 +59,24 @@
           </div>
           <p class="speech-status" id="tts-status" aria-live="polite"></p>
         </div>
+        <div class="audio-cache-block">
+          <div class="micro-label">本地发音缓存</div>
+          <div class="audio-cache-stats">
+            <span>单词发音 <strong id="audio-cache-word-count">0 / 0</strong></span>
+            <span>全部缓存 <strong id="audio-cache-total">0 条</strong></span>
+            <span>占用空间 <strong id="audio-cache-size">0 B</strong></span>
+          </div>
+          <div class="form-actions audio-cache-actions">
+            <button type="button" class="btn btn-primary" id="audio-cache-download">下载缺失单词发音</button>
+            <button type="button" class="btn" id="audio-cache-clear">清除发音缓存</button>
+          </div>
+          <div id="audio-cache-progress-wrap" class="audio-cache-progress" hidden>
+            <progress id="audio-cache-progress" value="0" max="1"></progress>
+            <span id="audio-cache-progress-text"></span>
+          </div>
+          <p class="speech-status" id="audio-cache-status" aria-live="polite"></p>
+          <p class="pronunciation-note">如更换 Worker 中的声音，可清除本地发音缓存后重新下载。</p>
+        </div>
         <div class="system-speech-block">
           <div class="micro-label">系统发音（备用）</div>
         <div class="speech-settings-grid">
@@ -202,6 +220,7 @@
   <div id="toast" class="toast" hidden></div>
   <script src="logic.js" defer></script>
   <script src="store.js" defer></script>
+  <script src="audio-cache.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

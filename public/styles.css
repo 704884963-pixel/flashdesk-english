@@ -174,16 +174,31 @@ select:focus, input:focus, textarea:focus {
 }
 
 .tts-settings-block,
+.audio-cache-block,
 .system-speech-block {
   display: grid;
   gap: 12px;
   margin-top: 16px;
 }
 
+.audio-cache-block,
 .system-speech-block {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+
+.audio-cache-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.audio-cache-stats strong { color: var(--text); font-weight: 650; }
+.audio-cache-actions { flex-wrap: wrap; }
+.audio-cache-progress { display: grid; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.audio-cache-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
 
 .speech-settings-grid {
   display: grid;
@@ -791,6 +806,9 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   .speech-test { width: 100%; }
   .speech-config-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .speech-config-actions .btn { width: 100%; }
+  .audio-cache-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .audio-cache-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .audio-cache-actions .btn { width: 100%; }
   .speech-actions { position: static; margin-top: 8px; max-width: none; }
   .speech-actions .speak-front { flex: 1 1 120px; }
   .word-list-item { gap: 6px; padding: 8px 10px; }

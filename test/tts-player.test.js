@@ -117,7 +117,7 @@ test('normal and slow playback share one cached MP3 and one fetch', async () => 
   await h.run("playEnglish('approach', { rate: 1 })");
   await h.run("playEnglish('approach', { rate: 0.75 })");
   assert.equal(h.fetchCalls.length, 1);
-  assert.equal(h.audioInstances[0].src, h.audioInstances[1].src);
+  assert.notEqual(h.audioInstances[0].src, h.audioInstances[1].src);
 });
 
 test('concurrent requests for the same text share one pending fetch', async () => {
