@@ -590,17 +590,32 @@ select:focus, input:focus, textarea:focus {
 .ai-article-preview { margin-top: 16px; }
 .ai-article-preview h3 { font-family: var(--display); font-size: 1.55rem; }
 .ai-article-content { margin: 18px 0; font-size: 1.02rem; line-height: 1.75; }
-.ai-article-content p { margin-bottom: 1.2em; }
+.ai-translation-row.is-bilingual { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: stretch; margin-bottom: 14px; }
+.ai-article-paragraph { margin: 0 0 1.2em; padding: 8px 10px 10px; border: 1px solid transparent; border-radius: 10px; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.ai-translation-row.is-bilingual .ai-article-paragraph { margin-bottom: 0; }
+.ai-article-paragraph p { margin: 0; }
+.ai-article-paragraph.is-narrating { border-color: color-mix(in srgb, var(--accent) 42%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 5%, transparent); }
+.ai-paragraph-actions { display: flex; justify-content: flex-end; margin: -2px 0 3px; }
+.ai-paragraph-narrate { min-height: 32px; padding: 5px 9px; font-size: .76rem; color: var(--muted); }
 .ai-usage { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .ai-word-inline-form { display: grid; gap: 10px; padding-top: 4px; }
 .ai-word-inline-form .btn-primary { justify-self: start; }
+.ai-article-title-translation { margin: 4px 0 8px; color: var(--muted); font-size: 1rem; }
+.ai-article-translation { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.ai-article-translation p { margin: 4px 0 0; line-height: 1.75; overflow-wrap: anywhere; }
 
 @media (max-width: 560px) {
   .ai-home-actions, .ai-settings-grid, .ai-options { grid-template-columns: minmax(0, 1fr); }
   .ai-card-actions .btn { flex: 1 1 126px; }
   .ai-word-inline-form .btn-primary { width: 100%; }
   .ai-page { min-width: 0; }
+  .ai-article-paragraph { padding-inline: 7px; }
+  .ai-paragraph-narrate { min-height: 36px; }
   .nav { width: 100%; }
+}
+@media (max-width: 700px) {
+  .ai-translation-row.is-bilingual { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .ai-article-translation { margin: 0 7px 14px; }
 }
 .article-action-dialog { width: min(520px, calc(100vw - 28px)); max-height: min(78vh, 680px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
 .article-action-dialog::backdrop { background: #0009; }

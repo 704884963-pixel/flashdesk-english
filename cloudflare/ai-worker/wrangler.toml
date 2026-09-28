@@ -4,7 +4,8 @@ compatibility_date = "2026-09-27"
 
 [vars]
 AI_PROVIDER = "zhipu"
-AI_MODEL = "glm-4.5-air"
+AI_MODEL = "glm-5.2"
 AI_LOOKUP_MODEL = "glm-4.5-air"
+AI_TRANSLATION_MODEL = "glm-4.5-air"
 # ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 # FLASHDESK_ALLOWED_ORIGIN = "https://your-user.github.io"

@@ -146,6 +146,18 @@
     return { paragraphs, sentenceCount: sentenceIndex, wordCount: wordTokens(content).length };
   }
 
+  function articleSpeechSegments(content) {
+    return analyzeArticle(content).paragraphs
+      .flatMap((paragraph) => paragraph.sentences.map((sentence) => sentence.text.trim()))
+      .filter(Boolean);
+  }
+
+  function articleSpeechParagraphs(content) {
+    return analyzeArticle(content).paragraphs
+      .map((paragraph) => paragraph.sentences.map((sentence) => sentence.text.trim()).filter(Boolean))
+      .filter((sentences) => sentences.length);
+  }
+
   function normalizeProgress(sentenceIndex, percent) {
     const index = Number.isFinite(Number(sentenceIndex)) ? Math.max(0, Math.floor(Number(sentenceIndex))) : 0;
     const value = Number.isFinite(Number(percent)) ? Math.min(100, Math.max(0, Math.round(Number(percent)))) : 0;
@@ -160,7 +172,7 @@
 
   const FlashArticleUtils = {
     normalizeContent, normalizeArticleInput, splitParagraphs, splitSentences,
-    wordTokens, wordKey, buildWordLookup, articleCoverage, analyzeArticle,
+    wordTokens, wordKey, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
     normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists,
   };
   if (typeof window !== 'undefined') window.FlashArticleUtils = FlashArticleUtils;

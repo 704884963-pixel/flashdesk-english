@@ -26,9 +26,39 @@
     return Math.max(4, Math.min(6, Math.floor(Number(value) || 5)));
   }
 
+  function articleTargetCount(value = 3) {
+    return Math.max(1, Math.min(3, Math.floor(Number(value) || 3)));
+  }
+
+  function sentencePracticeTargets(targets) {
+    return (targets || []).slice(0, 2).map((target, index) => ({
+      ...target,
+      role: index === 0 ? 'primary' : 'secondary',
+    }));
+  }
+
+  function articlePracticeTargets(targets) {
+    return (targets || []).slice(0, 3).map((target, index) => ({
+      ...target,
+      role: index === 0 ? 'primary' : 'secondary',
+    }));
+  }
+
+  function sentenceHistoryTargets(usedWords, practiceTargets) {
+    const used = [...new Set((usedWords || []).map((word) => String(word || '').trim()).filter(Boolean))];
+    if (!used.length) return (practiceTargets || []).map((target) => target.front).filter(Boolean);
+    const primaryKey = wordKey(practiceTargets?.[0]?.front);
+    if (!primaryKey) return used;
+    return [...used.filter((word) => wordKey(word) === primaryKey), ...used.filter((word) => wordKey(word) !== primaryKey)];
+  }
+
   function latestSentenceTargetWords(history) {
     const generations = normalizeRecentGenerations(history).generations;
     return [...generations].reverse().find((item) => item.type === 'sentences')?.targetWords || [];
+  }
+
+  function latestSentencePrimaryTarget(history) {
+    return latestSentenceTargetWords(history)[0] || '';
   }
 
   function selectAiTargetWords({ cards, recentAiTargets, preferredWords = [], count = 8, now = Date.now() }) {
@@ -88,7 +118,7 @@
 
   function buildAiContext({ cards, targetWords, unknownWords, topic, difficulty }) {
     return {
-      targetWords: (targetWords || []).map(({ front, back, forms, reason }) => ({ front, back, forms, reason })),
+      targetWords: (targetWords || []).map(({ front, back, forms, reason, role }) => ({ front, back, forms, reason, ...(role ? { role } : {}) })),
       unknownWords: [...new Set(Array.from(unknownWords || []).map(wordKey).filter(Boolean))].slice(0, 50),
       knownWordSample: knownWordSample(cards, targetWords, 20),
       ...(topic ? { topic } : {}),
@@ -97,8 +127,17 @@
   }
 
   function buildAiRequest(task, context, options = {}) {
-    if (!['generate_sentences', 'generate_article', 'lookup_word'].includes(task)) throw new Error('unknown AI task');
+    if (!['generate_sentences', 'generate_article', 'translate_article', 'lookup_word'].includes(task)) throw new Error('unknown AI task');
     return { task, context, options };
+  }
+
+  function buildArticleTranslationRequest(title, paragraphs) {
+    const articleTitle = String(title || '').trim();
+    const articleParagraphs = Array.isArray(paragraphs) ? paragraphs.map((paragraph) => String(paragraph || '').trim()) : [];
+    if (!articleTitle || !articleParagraphs.length || articleParagraphs.some((paragraph) => !paragraph)) {
+      throw new Error('article title and paragraphs are required');
+    }
+    return buildAiRequest('translate_article', { title: articleTitle, paragraphs: articleParagraphs });
   }
 
   function lookupCacheKey(word, sentence) {
@@ -126,8 +165,9 @@
 
   const api = {
     wordKey, normalizeRecentGenerations, recordAiGeneration, selectAiTargetWords,
-    sentenceTargetCount, latestSentenceTargetWords,
-    knownWordSample, buildAiContext, buildAiRequest, lookupCacheKey,
+    sentenceTargetCount, articleTargetCount, sentencePracticeTargets, articlePracticeTargets, sentenceHistoryTargets,
+    latestSentenceTargetWords, latestSentencePrimaryTarget,
+    knownWordSample, buildAiContext, buildAiRequest, buildArticleTranslationRequest, lookupCacheKey,
     buildLookupWordRequest, wordDraftFromLookup,
   };
   global.FlashAiLearning = api;

@@ -8,6 +8,7 @@ const ArticleUtils = require('../public/article-utils.js');
 const now = 2_000_000_000_000;
 const word = (front, fields = {}) => ({ deck: 'Words', front, back: `${front} meaning`, forms: [], due: now + 1000, streak: 1, lapses: 0, ...fields });
 const appSource = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+const stylesSource = fs.readFileSync(path.join(__dirname, '../public/styles.css'), 'utf8');
 
 test('AI target selector only selects Words', () => assert.deepEqual(Ai.selectAiTargetWords({ cards: [word('one'), { deck: 'Sentences', front: 'sentence' }], count: 5, now }).map((x) => x.front), ['one']));
 test('currently weak Words receive first priority', () => assert.equal(Ai.selectAiTargetWords({ cards: [word('ordinary'), word('lapsed', { lapses: 2, streak: 0 })], count: 1, now })[0].front, 'lapsed'));
@@ -39,6 +40,22 @@ test('recent AI targets are lowered rather than prohibited', () => {
 test('target count is enforced', () => assert.equal(Ai.selectAiTargetWords({ cards: Array.from({ length: 30 }, (_, i) => word(`w${i}`)), count: 8, now }).length, 8));
 test('Today Sentence candidate count defaults to five', () => assert.equal(Ai.sentenceTargetCount(), 5));
 test('Today Sentence candidate count stays within four to six', () => { assert.equal(Ai.sentenceTargetCount(2), 4); assert.equal(Ai.sentenceTargetCount(6), 6); assert.equal(Ai.sentenceTargetCount(20), 6); });
+test('Today Sentence assigns one primary and at most one secondary target', () => {
+  const targets = Ai.sentencePracticeTargets([word('primary'), word('secondary'), word('unused')]);
+  assert.equal(targets.length, 2);
+  assert.equal(targets[0].role, 'primary');
+  assert.equal(targets[1].role, 'secondary');
+});
+test('Sentence history keeps the practiced primary target first', () => {
+  const practice = Ai.sentencePracticeTargets([word('primary'), word('secondary')]);
+  assert.deepEqual(Ai.sentenceHistoryTargets(['secondary', 'primary'], practice), ['primary', 'secondary']);
+  assert.deepEqual(Ai.sentenceHistoryTargets([], practice), ['primary', 'secondary']);
+});
+test('Today Article uses one primary and at most two secondary targets', () => {
+  assert.equal(Ai.articleTargetCount(), 3); assert.equal(Ai.articleTargetCount(1), 1); assert.equal(Ai.articleTargetCount(8), 3);
+  const targets = Ai.articlePracticeTargets([word('primary'), word('secondary-one'), word('secondary-two'), word('unused')]);
+  assert.deepEqual(targets.map((target) => target.role), ['primary', 'secondary', 'secondary']);
+});
 test('latest actual Sentence targets are available for Article reinforcement', () => {
   const history = { generations: [
     { type: 'sentences', targetWords: ['approach'] },
@@ -54,6 +71,10 @@ test('Article selection can raise a recent Sentence word without forcing a depen
   assert.equal(Ai.selectAiTargetWords({ cards, recentAiTargets, preferredWords: ['reinforced'], count: 1, now })[0].front, 'reinforced');
   assert.deepEqual(Ai.latestSentenceTargetWords({ generations: [{ type: 'article', targetWords: ['fresh'] }] }), []);
 });
+test('latest Sentence primary target alone is available for Article reinforcement', () => {
+  const history = { generations: [{ type: 'sentences', targetWords: ['approach', 'evidence'] }] };
+  assert.equal(Ai.latestSentencePrimaryTarget(history), 'approach');
+});
 test('AI history retains only ten generations', () => {
   let history = { generations: [] }; for (let i = 0; i < 12; i += 1) history = Ai.recordAiGeneration(history, { type: 'sentences', targetWords: [`w${i}`], createdAt: String(i) });
   assert.equal(history.generations.length, 10); assert.deepEqual(history.generations[0].targetWords, ['w2']);
@@ -68,6 +89,12 @@ test('Sentence and Article requests use provider-neutral schemas', () => {
   assert.equal(Ai.buildAiRequest('generate_sentences', { targetWords: [] }).task, 'generate_sentences');
   assert.equal(Ai.buildAiRequest('generate_article', { targetWords: [] }).task, 'generate_article');
 });
+test('Article translation request sends only title and paragraphs', () => {
+  assert.deepEqual(Ai.buildArticleTranslationRequest(' A title ', [' First paragraph. ', ' Second paragraph. ']), {
+    task: 'translate_article', context: { title: 'A title', paragraphs: ['First paragraph.', 'Second paragraph.'] }, options: {},
+  });
+  assert.throws(() => Ai.buildArticleTranslationRequest('', ['Article text.']));
+});
 test('AI history and settings use keys separate from learning data', () => {
   assert.match(appSource, /flashdesk-ai-settings/); assert.match(appSource, /flashdesk-ai-history/);
   const section = appSource.slice(appSource.indexOf('function saveAiSettings'), appSource.indexOf('function rememberAiGeneration'));
@@ -79,22 +106,159 @@ test('Article preview saves only from the explicit save button', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.doesNotMatch(generate, /ArticleStore\.create/);
 });
+test('Article translation is requested only after the explicit button click', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
+  assert.match(render, /data-ai-translate-article/);
+  assert.doesNotMatch(render, /aiFetch\(/);
+  assert.match(toggle, /buildArticleTranslationRequest/);
+  assert.match(toggle, /aiFetch\('\/ai'/);
+});
+test('Article translation uses a session cache and repeated expansion does not request AI again', () => {
+  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
+  assert.ok(toggle.indexOf('translationCache.get(cacheKey)') < toggle.indexOf("aiFetch('/ai'"));
+  assert.match(toggle, /aiArticleTranslationAligned\(cached, paragraphs\.length\)/);
+  assert.match(toggle, /translationExpanded = !state\.ai\.translationExpanded/);
+  assert.match(toggle, /translationCache\.set\(cacheKey, response\.data\)/);
+});
+test('Article translation failure preserves the English preview and learning data', () => {
+  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
+  assert.match(toggle, /translationError = err\.message/);
+  assert.doesNotMatch(toggle, /state\.ai\.preview\s*=\s*null|ArticleStore|FlashStore|rememberAiGeneration|gradeCard/);
+});
+test('generated Article renders clickable word tokens while punctuation remains outside', () => {
+  const render = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(render, /interactiveWordHtml\(sentence\.text/);
+  assert.match(render, /data-ai-article-word/);
+  assert.match(appSource, /value\.slice\(position, token\.index\)/);
+});
+test('generated Article word click passes its current Sentence to the shared lookup flow', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
+  assert.match(handler, /data-ai-article-word/);
+  assert.match(handler, /aiArticleSentenceAt\(preview\.data\.content, articleWord\.dataset\.aiArticleSentenceIndex\)/);
+  assert.match(handler, /showAiSentenceWord\(articleWord\.dataset\.aiArticleWord, sentence\)/);
+});
+test('generated Article Words and forms use the shared existing-card lookup without AI', () => {
+  const show = appSource.slice(appSource.indexOf('async function showAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
+  assert.match(show, /aiLookupExistingCard\(word, null\)/);
+  assert.ok(show.indexOf('aiLookupExistingCard(word, null)') < show.indexOf('lookupAiSentenceWord'));
+  assert.match(appSource, /FlashArticleUtils\.buildWordLookup\(state\.cards\)/);
+});
+test('saving an inline Word refreshes both Sentence and Article preview lookups', () => {
+  const refresh = appSource.slice(appSource.indexOf('function refreshAiSentenceWordLookup'), appSource.indexOf('async function saveInlineAiWord'));
+  assert.match(refresh, /data-ai-sentence-word/);
+  assert.match(refresh, /data-ai-article-word/);
+});
+test('Today Article narration plays paragraph sentences in order through playEnglish', () => {
+  const narration = appSource.slice(appSource.indexOf('async function startAiArticleNarration'), appSource.indexOf('function aiSettingsHtml'));
+  assert.match(narration, /FlashArticleUtils\.articleSpeechParagraphs\(preview\.data\.content\)/);
+  assert.match(narration, /for \(let paragraphPosition = 0;/);
+  assert.match(narration, /for \(let sentenceIndex = 0;/);
+  assert.match(narration, /await playEnglish\(paragraph\.sentences\[sentenceIndex\], \{ rate: state\.ai\.narrationRate, waitForEnd: true \}\)/);
+});
+test('Today Article renders one unobtrusive narration action per paragraph', () => {
+  const render = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(render, /data-ai-article-paragraph/);
+  assert.match(render, /data-ai-narrate-paragraph/);
+  assert.match(render, /▶ 本段朗读/);
+});
+test('paragraph narration uses the selected narration speed and the shared controller', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
+  assert.match(handler, /startAiArticleNarration\(state\.ai\.narrationSpeed, paragraphIndex\)/);
+  assert.match(handler, /narrationMode === 'paragraph'/);
+});
+test('Today Article narration uses cancellable sentence and paragraph pauses', () => {
+  const narration = appSource.slice(appSource.indexOf('const AI_SENTENCE_PAUSE_MS'), appSource.indexOf('function aiSettingsHtml'));
+  assert.match(narration, /AI_SENTENCE_PAUSE_MS = 350/);
+  assert.match(narration, /AI_PARAGRAPH_PAUSE_MS = 800/);
+  assert.match(narration, /cancelAiNarrationPause/);
+  assert.match(narration, /aiNarrationPause\(AI_SENTENCE_PAUSE_MS/);
+  assert.match(narration, /aiNarrationPause\(AI_PARAGRAPH_PAUSE_MS/);
+});
+test('narration highlight follows the current paragraph and clears on stop', () => {
+  const refresh = appSource.slice(appSource.indexOf('function refreshAiArticleNarrationUi'), appSource.indexOf('function aiNarrationPause'));
+  assert.match(refresh, /classList\.toggle\('is-narrating'/);
+  const stop = appSource.slice(appSource.indexOf('function stopAiArticleNarration'), appSource.indexOf('async function startAiArticleNarration'));
+  assert.match(stop, /narrationParagraphIndex = null/);
+  assert.match(stop, /refreshAiArticleNarrationUi/);
+});
+test('reference translation renders beside each corresponding English paragraph before Article actions', () => {
+  const paragraphs = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(paragraphs, /ai-translation-row/);
+  assert.match(paragraphs, /translation\.paragraphsZh\[paragraphIndex\]/);
+  assert.match(paragraphs, /data-ai-article-word/);
+  assert.doesNotMatch(paragraphs, /data-ai-article-word[^\n]+paragraphsZh/);
+  assert.ok(paragraphs.indexOf('ai-article-paragraph') < paragraphs.indexOf('ai-article-translation'));
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.ok(render.indexOf('aiArticlePreviewContentHtml') < render.indexOf('data-ai-narrate-article'));
+});
+test('bilingual Article layout stacks each Chinese paragraph after English on mobile', () => {
+  assert.match(stylesSource, /ai-translation-row\.is-bilingual[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/);
+  assert.match(stylesSource, /@media \(max-width: 700px\)[\s\S]*?ai-translation-row\.is-bilingual[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+});
+test('Article translation alignment is checked before it enters the session cache', () => {
+  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
+  assert.ok(toggle.indexOf('aiArticleTranslationAligned(response.data') < toggle.indexOf('translationCache.set'));
+  assert.match(toggle, /参考翻译段落未能正确对齐，请重试/);
+});
+test('Today Article narration offers normal and slow rates with one active queue', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.match(render, /data-ai-narrate-article data-rate="1"/);
+  assert.match(render, /data-ai-narrate-article data-rate="0\.75"/);
+  assert.match(render, /▶ 整篇朗读/);
+  assert.match(render, /🐢 慢速朗读/);
+  assert.match(render, /■ 停止朗读/);
+  const start = appSource.slice(appSource.indexOf('async function startAiArticleNarration'), appSource.indexOf('function aiSettingsHtml'));
+  assert.match(start, /stopAiArticleNarration\(false\)/);
+  assert.match(start, /narrationId !== state\.ai\.narrationId/);
+});
+test('Today Article narration can stop immediately and cancels queued segments', () => {
+  const stop = appSource.slice(appSource.indexOf('function stopAiArticleNarration'), appSource.indexOf('async function startAiArticleNarration'));
+  assert.match(stop, /narrationId \+= 1/);
+  assert.match(stop, /narrationRate = null/);
+  assert.match(stop, /stopEnglishPlayback\(\)/);
+});
+test('regenerating or leaving Today Article stops narration', () => {
+  const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('async function toggleAiArticleTranslation'));
+  assert.match(generate, /type === 'article'.*stopAiArticleNarration\(false\)/);
+  const switching = appSource.slice(appSource.indexOf('function switchView'), appSource.indexOf('/* ---------- events'));
+  assert.match(switching, /name !== 'ai'.*stopAiArticleNarration\(false\)/);
+  const handler = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
+  assert.match(handler, /data-ai-home[\s\S]*?stopAiArticleNarration\(false\)/);
+});
+test('Article narration has no learning-data or history side effects', () => {
+  const narration = appSource.slice(appSource.indexOf('function stopAiArticleNarration'), appSource.indexOf('function aiSettingsHtml'));
+  assert.doesNotMatch(narration, /FlashStore|ArticleStore|rememberAiGeneration|gradeCard|streak|lapses|due\s*=/);
+});
+test('Today Article keeps the save behavior with lower-priority wording', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.match(render, /data-ai-save-article>保存到阅读库/);
+  assert.doesNotMatch(render, /data-ai-save-article[^>]*btn-primary/);
+  assert.match(appSource, /ArticleStore\.create\(\{ title: preview\.data\.title, content: preview\.data\.content/);
+});
 test('AI generation does not call FlashStore or mutate review progress', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.doesNotMatch(generate, /FlashStore|gradeCard|streak|lapses|due\s*=/);
 });
+test('A/B experiment UI and request helpers have been removed', () => {
+  assert.equal(typeof Ai.buildSentenceComparisonRequests, 'undefined');
+  assert.equal(typeof Ai.buildArticleComparisonRequests, 'undefined');
+  assert.doesNotMatch(appSource, /data-ai-compare|本地模型 A\/B|AI_EXPERIMENT_MODEL/);
+});
 test('existing Sentence duplicate uses the current exact-front helper', () => assert.match(appSource, /FlashArticleUtils\.sentenceExists\(state\.cards, sentence\.english\)/));
 test('AI pronunciation reuses playEnglish', () => assert.match(appSource, /playEnglish\(button\.dataset\.aiSpeak/));
-test('Today Sentence requests one result from five candidate targets', () => {
+test('Today Sentence keeps five internal candidates but sends only primary and optional secondary', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.match(generate, /sentenceTargetCount\(\)/);
+  assert.match(generate, /sentencePracticeTargets\(state\.ai\.targets\)/);
   assert.match(generate, /\{ count: 1 \}/);
 });
-test('Today Sentence renders one card with separate candidate and used-word labels', () => {
+test('Today Sentence renders one card with primary and optional secondary labels', () => {
   const render = appSource.slice(appSource.indexOf('function renderAiSentences'), appSource.indexOf('function renderAiArticle'));
   assert.match(render, /sentences\[0\]/);
-  assert.match(render, /本轮候选重点词/);
-  assert.match(render, /本句练习词/);
+  assert.match(appSource, /主目标词/);
+  assert.match(appSource, /顺带复习/);
+  assert.doesNotMatch(render, /本轮候选重点词/);
   assert.match(render, /生成今日长句/);
   assert.match(render, /换一句/);
   assert.doesNotMatch(render, /生成 3 条长句/);
@@ -102,12 +266,12 @@ test('Today Sentence renders one card with separate candidate and used-word labe
 test('AI history prefers actually used Sentence words and falls back to candidates', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.match(generate, /result\.data\.sentences\[0\]\?\.targetWordsUsed/);
-  assert.match(generate, /usedTargets\?\.length \? usedTargets : state\.ai\.targets/);
+  assert.match(generate, /sentenceHistoryTargets\(usedTargets, requestTargets\)/);
 });
 test('Article generation uses latest Sentence practice as an optional preference', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
-  assert.match(generate, /article \? FlashAiLearning\.latestSentenceTargetWords\(aiHistory\) : \[\]/);
-  assert.match(generate, /aiTargets\(article \? 10/);
+  assert.match(generate, /article \? FlashAiLearning\.latestSentencePrimaryTarget\(aiHistory\) : ''/);
+  assert.match(generate, /article \? FlashAiLearning\.articleTargetCount\(\)/);
 });
 test('frontend has no provider-specific conditional', () => assert.doesNotMatch(appSource, /if\s*\(\s*provider\s*===\s*['"]zhipu/));
 test('lookup_word uses the provider-neutral request schema', () => assert.equal(Ai.buildLookupWordRequest('evaluation', 'An evaluation helps.').task, 'lookup_word'));

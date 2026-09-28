@@ -1,4 +1,4 @@
-export const TASKS = new Set(['generate_sentences', 'generate_article', 'lookup_word']);
+export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word']);
 
 export function stripJsonFence(value) {
   const text = String(value || '').trim();
@@ -12,7 +12,7 @@ const nonempty = (value) => typeof value === 'string' && Boolean(value.trim());
 const words = (value) => Array.isArray(value) && value.every(nonempty);
 export const englishWordCount = (value) => (String(value || '').match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
 
-export function validateAiData(task, data) {
+export function validateAiData(task, data, context = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid AI output');
   if (task === 'lookup_word') {
     const fields = ['word', 'baseForm', 'meaningZh', 'meaningInContextZh', 'memoryReading', 'chineseReading'];
@@ -27,16 +27,23 @@ export function validateAiData(task, data) {
     });
     return { sentences };
   }
+  if (task === 'translate_article') {
+    if (!nonempty(data.titleZh) || !words(data.paragraphsZh) || !data.paragraphsZh.length) throw new Error('invalid article translation');
+    if (Array.isArray(context.paragraphs) && data.paragraphsZh.length !== context.paragraphs.length) {
+      throw new Error('article translation paragraphs do not align');
+    }
+    return { titleZh: data.titleZh.trim(), paragraphsZh: data.paragraphsZh.map((paragraph) => paragraph.trim()) };
+  }
   if (!nonempty(data.title) || !nonempty(data.content) || !words(data.targetWordsUsed)) throw new Error('invalid article');
   const wordCount = englishWordCount(data.content);
   if (wordCount < 200 || wordCount > 300) throw new Error('invalid article length');
   return { title: data.title.trim(), content: data.content.trim(), targetWordsUsed: data.targetWordsUsed.map((w) => w.trim()) };
 }
 
-export function parseAiOutput(task, content) {
+export function parseAiOutput(task, content, context = {}) {
   let parsed;
   try { parsed = JSON.parse(stripJsonFence(content)); } catch { throw new Error('invalid JSON'); }
-  return validateAiData(task, parsed);
+  return validateAiData(task, parsed, context);
 }
 
 export function validateClientRequest(body) {
@@ -55,6 +62,12 @@ export function validateClientRequest(body) {
     if (!nonempty(body.context.word) || !nonempty(body.context.sentence)) throw new Error('invalid lookup context');
     return { task: body.task, context: { word: body.context.word.trim(), sentence: body.context.sentence.trim() }, options: {} };
   }
+  if (body.task === 'translate_article') {
+    if (!nonempty(body.context.title) || !words(body.context.paragraphs) || !body.context.paragraphs.length) throw new Error('invalid article translation context');
+    return { task: body.task, context: { title: body.context.title.trim(), paragraphs: body.context.paragraphs.map((paragraph) => paragraph.trim()) }, options: {} };
+  }
   if (!Array.isArray(body.context.targetWords)) throw new Error('invalid context');
-  return { task: body.task, context: body.context, options: body.options && typeof body.options === 'object' ? body.options : {} };
+  const options = body.options && typeof body.options === 'object' && !Array.isArray(body.options) ? { ...body.options } : {};
+  if (options.variant !== undefined) throw new Error('invalid model variant');
+  return { task: body.task, context: body.context, options };
 }

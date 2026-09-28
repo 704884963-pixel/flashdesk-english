@@ -65,6 +65,15 @@ test('Article analysis retains paragraphs and global sentence indexes', () => {
   assert.equal(result.paragraphs.length, 2);
   assert.deepEqual(result.paragraphs.flatMap((p) => p.sentences.map((s) => s.index)), [0, 1, 2]);
 });
+test('Article speech segments preserve natural sentence order', () => {
+  assert.deepEqual(Utils.articleSpeechSegments('First sentence. Second sentence!\n\nThird sentence?'), ['First sentence.', 'Second sentence!', 'Third sentence?']);
+});
+test('Article speech paragraphs preserve paragraph and sentence boundaries', () => {
+  assert.deepEqual(Utils.articleSpeechParagraphs('First sentence. Second sentence!\n\nThird sentence?'), [
+    ['First sentence.', 'Second sentence!'],
+    ['Third sentence?'],
+  ]);
+});
 test('10,000-word Article segmentation completes without loss or overflow', () => {
   const content = Array.from({ length: 1000 }, (_, i) => `Paragraph ${i}: ${'word '.repeat(10)}ends.`).join('\n\n');
   const result = Utils.analyzeArticle(content);

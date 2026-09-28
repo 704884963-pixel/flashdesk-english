@@ -137,6 +137,27 @@ test('starting a new pronunciation stops the current audio', async () => {
   assert.equal(h.audioInstances[0].currentTime, 0);
 });
 
+test('waitForEnd resolves only after the current audio fragment ends', async () => {
+  const h = playerClient({ configured: true });
+  const playback = h.run("playEnglish('First sentence.', { rate: 1, waitForEnd: true })");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(h.audioInstances.length, 1);
+  let settled = false; playback.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(settled, false);
+  h.audioInstances[0].onended();
+  assert.equal(await playback, 'elevenlabs');
+});
+
+test('stopping waitForEnd playback cancels the current fragment immediately', async () => {
+  const h = playerClient({ configured: true });
+  const playback = h.run("playEnglish('First sentence.', { rate: 0.75, waitForEnd: true })");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.run('stopEnglishPlayback()');
+  assert.equal(await playback, 'cancelled');
+  assert.equal(h.audioInstances[0].paused, true);
+});
+
 test('loading feedback disables and restores the pressed button', () => {
   const h = playerClient({ configured: true });
   const button = node({ textContent: '🔊 正常' });
