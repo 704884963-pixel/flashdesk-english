@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const Ai = require('../public/ai-learning.js');
 const ArticleUtils = require('../public/article-utils.js');
 
@@ -9,6 +11,14 @@ const now = 2_000_000_000_000;
 const word = (front, fields = {}) => ({ deck: 'Words', front, back: `${front} meaning`, forms: [], due: now + 1000, streak: 1, lapses: 0, ...fields });
 const appSource = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
 const stylesSource = fs.readFileSync(path.join(__dirname, '../public/styles.css'), 'utf8');
+const aiWorkerSource = (file) => fs.readFileSync(path.join(__dirname, '../cloudflare/ai-worker/src', file), 'utf8');
+// Anchored on the full listener calls, so the `$` in the app's selectors never
+// has to appear in this file (and never has to survive shell quoting).
+const DOLLAR = String.fromCharCode(36);
+const aiRootClickHandler = (source) => source.slice(
+  source.indexOf(`${DOLLAR}('#ai-root').addEventListener('click'`),
+  source.indexOf(`${DOLLAR}('#add-form').addEventListener('submit'`),
+);
 
 test('AI target selector only selects Words', () => assert.deepEqual(Ai.selectAiTargetWords({ cards: [word('one'), { deck: 'Sentences', front: 'sentence' }], count: 5, now }).map((x) => x.front), ['one']));
 test('currently weak Words receive first priority', () => assert.equal(Ai.selectAiTargetWords({ cards: [word('ordinary'), word('lapsed', { lapses: 2, streak: 0 })], count: 1, now })[0].front, 'lapsed'));
@@ -51,11 +61,179 @@ test('Sentence history keeps the practiced primary target first', () => {
   assert.deepEqual(Ai.sentenceHistoryTargets(['secondary', 'primary'], practice), ['primary', 'secondary']);
   assert.deepEqual(Ai.sentenceHistoryTargets([], practice), ['primary', 'secondary']);
 });
-test('Today Article uses one primary and at most two secondary targets', () => {
-  assert.equal(Ai.articleTargetCount(), 3); assert.equal(Ai.articleTargetCount(1), 1); assert.equal(Ai.articleTargetCount(8), 3);
-  const targets = Ai.articlePracticeTargets([word('primary'), word('secondary-one'), word('secondary-two'), word('unused')]);
-  assert.deepEqual(targets.map((target) => target.role), ['primary', 'secondary', 'secondary']);
+test('Today Article defaults to three focus words and never exceeds four', () => {
+  assert.equal(Ai.articleTargetCount(), 3); assert.equal(Ai.articleTargetCount(1), 1); assert.equal(Ai.articleTargetCount(8), 4);
+  const targets = Ai.articlePracticeTargets([word('primary'), word('secondary-one'), word('secondary-two'), word('secondary-three'), word('unused')]);
+  assert.deepEqual(targets.map((target) => target.role), ['primary', 'secondary', 'secondary', 'secondary']);
 });
+
+/* ---------- Today Sentence primary cooldown ---------- */
+
+// One finished round of Today Sentence, fed back through the real history
+// helper so the tests exercise the same shape the app persists.
+function sentenceRound(cards, history, today = {}) {
+  return Ai.sentencePracticeSelection({ cards, recentAiTargets: history.generations, now, today });
+}
+function recordRound(history, selection) {
+  return Ai.recordAiGeneration(history, {
+    type: 'sentences',
+    targetWords: selection.practice.map((target) => target.front),
+    primary: selection.practice[0]?.front,
+  });
+}
+const rotate = (cards, rounds) => {
+  let history = { generations: [] };
+  const seen = [];
+  for (let index = 0; index < rounds; index += 1) {
+    const selection = sentenceRound(cards, history);
+    const primaries = seen.map((entry) => entry[0]);
+    if (primaries.length && primaries[primaries.length - 1] === selection.practice[0]?.front) return { seen, repeated: true };
+    seen.push(selection.practice.map((target) => target.front));
+    history = recordRound(history, selection);
+  }
+  return { seen, repeated: false };
+};
+
+test('Today Sentence never repeats the same primary in consecutive rounds', () => {
+  const cards = [word('delay', { streak: 0, wordNumber: 1 }), word('ticket', { streak: 0, wordNumber: 2 }), word('reason', { streak: 0, wordNumber: 3 })];
+  const { seen, repeated } = rotate(cards, 9);
+  assert.equal(repeated, false);
+  assert.deepEqual(seen.slice(0, 6).map((entry) => entry[0]), ['delay', 'ticket', 'reason', 'delay', 'ticket', 'reason']);
+});
+test('recent primaries are clearly demoted without being banned', () => {
+  const history = { generations: [{ type: 'sentences', targetWords: ['delay', 'ticket'], primary: 'delay' }] };
+  const cards = [word('delay', { streak: 0, wordNumber: 1 }), word('ticket', { streak: 0, wordNumber: 2 })];
+  const selection = Ai.sentencePracticeSelection({ cards, recentAiTargets: history.generations, now });
+  assert.equal(selection.practice[0].front, 'ticket');
+  const two = [word('delay', { streak: 0, wordNumber: 1 }), word('ticket', { streak: 0, wordNumber: 2 })];
+  assert.equal(Ai.sentencePracticeSelection({ cards: two, recentAiTargets: history.generations, now }).practice.length, 2);
+  const few = [word('delay', { streak: 0, wordNumber: 1 })];
+  assert.equal(Ai.sentencePracticeSelection({ cards: few, recentAiTargets: history.generations, now }).practice[0].front, 'delay');
+});
+test('new Words stay the strongest single category while rotating', () => {
+  const cards = [word('fresh', { streak: 0 }), word('ordinary')];
+  const selection = Ai.sentencePracticeSelection({ cards, recentAiTargets: [], now });
+  assert.equal(selection.practice[0].front, 'fresh');
+  assert.equal(selection.practice[0].reason, 'new');
+  const cards2 = [word('weak', { lapses: 2, streak: 0 }), word('fresh', { streak: 0 })];
+  assert.equal(Ai.sentencePracticeSelection({ cards: cards2, recentAiTargets: [], now }).practice[0].front, 'weak');
+});
+test('a cooled-down primary can return in a later round', () => {
+  const cards = [word('delay', { streak: 0, wordNumber: 1 }), word('ticket', { streak: 0, wordNumber: 2 }), word('reason', { streak: 0, wordNumber: 3 })];
+  const { seen, repeated } = rotate(cards, 6);
+  assert.equal(repeated, false);
+  assert.equal(seen.filter((entry) => entry[0] === 'delay').length, 2);
+  assert.equal(Ai.sentencePracticeSelection({ cards: [word('delay', { streak: 0 })], recentAiTargets: [{ type: 'sentences', targetWords: ['delay'], primary: 'delay' }], now }).practice[0].front, 'delay');
+});
+
+/* ---------- Today Sentence secondary rotation ---------- */
+
+test('secondary target does not stay frozen on the same word', () => {
+  const cards = [word('delay', { streak: 0, wordNumber: 1 }), word('ticket', { streak: 0, wordNumber: 2 }), word('reason', { streak: 0, wordNumber: 3 })];
+  const { seen } = rotate(cards, 6);
+  const pairs = seen.map((entry) => entry.join('+'));
+  assert.equal(new Set(pairs.slice(0, 3)).size, 3);
+  assert.equal(pairs[3], pairs[0]);
+});
+
+/* ---------- Today Article focus words ---------- */
+
+const techTarget = (front) => ({ deck: 'Words', front, back: `${front} 技术`, forms: [], due: now + 1000, streak: 1, lapses: 0, reason: 'other' });
+const lifeTarget = (front, reason = 'other') => ({ deck: 'Words', front, back: `${front} 日常生活`, forms: [], due: now + 1000, streak: 1, lapses: 0, reason });
+
+test('Today Article defaults to exactly three focus words', () => {
+  const cards = Array.from({ length: 8 }, (_, index) => word(`w${index}`));
+  const targets = Ai.selectAiTargetWords({ cards, count: Ai.articleTargetCount(), now });
+  assert.equal(Ai.selectArticleFocusWords({ targets, recentAiTargets: [] }).length, 3);
+  assert.equal(Ai.articleTargetCount(), 3);
+});
+test('Today Article focus words never exceed four', () => {
+  const cards = Array.from({ length: 10 }, (_, index) => word(`w${index}`));
+  const targets = Ai.selectAiTargetWords({ cards, count: 6, now });
+  assert.equal(Ai.selectArticleFocusWords({ targets, recentAiTargets: [], count: 4 }).length, 4);
+  assert.ok(Ai.selectArticleFocusWords({ targets, recentAiTargets: [], count: 99 }).length <= 4);
+});
+test('the latest Sentence primary can enter Today Article focus words', () => {
+  const targets = [lifeTarget('ticket', 'lapsed'), lifeTarget('delay', 'new'), lifeTarget('reason', 'due'), lifeTarget('sunset'), lifeTarget('market')];
+  const recentAiTargets = [{ type: 'sentences', targetWords: ['reason', 'ticket'], primary: 'reason' }];
+  const focus = Ai.selectArticleFocusWords({ targets, recentAiTargets, topic: 'daily' });
+  assert.equal(focus[0].front, 'reason');
+  assert.equal(focus[0].role, 'primary');
+});
+test('automatic everyday topics admit at most one technical focus word', () => {
+  const targets = ['transformer', 'neuron', 'inference', 'parameter', 'embedding', 'agent', 'prompt'].map(techTarget);
+  const focus = Ai.selectArticleFocusWords({ targets, recentAiTargets: [], topic: 'auto' });
+  assert.equal(focus.filter((item) => item.technical).length, 1);
+});
+test('choosing a technical topic explicitly lifts the technical cap', () => {
+  const targets = ['transformer', 'neuron', 'inference', 'parameter', 'embedding', 'agent', 'prompt'].map(techTarget);
+  const focus = Ai.selectArticleFocusWords({ targets, recentAiTargets: [], topic: 'ai-tech', count: 4 });
+  assert.equal(focus.length, 4);
+  assert.equal(focus.filter((item) => item.technical).length, 4);
+});
+test('a tech-heavy library cannot turn an automatic everyday article into a technical one', () => {
+  const cards = [
+    word('transformer', { back: 'transformer 技术' }), word('neuron', { back: 'neuron 技术' }), word('neural', { back: 'neural 技术' }),
+    word('inference', { back: 'inference 技术' }), word('parameter', { back: 'parameter 技术' }), word('embedding', { back: 'embedding 技术' }),
+    word('agent', { back: 'agent 技术' }), word('prompt', { back: 'prompt 技术' }),
+    word('delay', { streak: 0, back: 'delay 日常生活' }), word('ticket', { due: now - 86400000, back: 'ticket 日常生活' }), word('reason', { lapses: 2, streak: 0, back: 'reason 日常生活' }),
+  ];
+  const targets = Ai.selectAiTargetWords({ cards, count: 4, now });
+  assert.ok(targets.some((target) => Ai.isTechnicalTarget(target)));
+  const focus = Ai.selectArticleFocusWords({ targets, recentAiTargets: [], topic: 'auto' });
+  assert.equal(focus.length, 3);
+  assert.equal(focus.filter((item) => item.technical).length, 0);
+  assert.deepEqual(focus.map((item) => item.front), ['delay', 'reason', 'ticket']);
+});
+test('an all-technical target pool still yields only one automatic focus word', () => {
+  const targets = ['transformer', 'neuron', 'inference', 'parameter', 'embedding', 'agent', 'prompt'].map(techTarget);
+  const focus = Ai.selectArticleFocusWords({ targets, recentAiTargets: [], topic: 'auto' });
+  assert.equal(focus.length, 1);
+  assert.equal(focus.filter((item) => item.technical).length, 1);
+});
+test('Article generation reuses existing AI history state without a new store', () => {
+  const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
+  assert.match(generate, /selectArticleFocusWords\(/);
+  assert.match(generate, /FlashAiLearning\.articleTargetCount\(\)/);
+  assert.doesNotMatch(generate, /flashdesk-ai-targets|localStorage.*primaryCooldown/i);
+});
+test('target rotation never writes to the formal learning data', async () => {
+  // The deployed store adapter is the thing that touches flashdesk-data.json.
+  // Driving the new selection + history code against it must leave the file
+  // byte-for-byte identical.
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'flashdesk-ai-targets-'));
+  const dataFile = path.join(dir, 'flashdesk-data.json');
+  const cards = [
+    { front: 'delay', back: '延迟', deck: 'Words', id: 'a', due: now + 1000, streak: 0, lapses: 0 },
+    { front: 'ticket', back: '票', deck: 'Words', id: 'b', due: now + 1000, streak: 0, lapses: 0 },
+    { front: 'reason', back: '原因', deck: 'Words', id: 'c', due: now + 1000, streak: 0, lapses: 0 },
+  ];
+  fs.writeFileSync(dataFile, JSON.stringify({ cards, history: [] }));
+  const before = fs.readFileSync(dataFile, 'utf8');
+  const stored = { key: '' };
+  const window = {};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pwa/store-local.js'), 'utf8'), {
+    window, navigator: {},
+    localStorage: {
+      getItem: (key) => (key === stored.key ? stored.value : null),
+      setItem: (key, value) => { stored.key = key; stored.value = value; },
+    },
+  });
+  let history = { generations: [] };
+  for (let round = 0; round < 4; round += 1) {
+    const selection = Ai.sentencePracticeSelection({ cards, recentAiTargets: history.generations, now });
+    history = Ai.recordAiGeneration(history, { type: 'sentences', targetWords: selection.practice.map((t) => t.front), primary: selection.practice[0]?.front });
+    const focus = Ai.selectArticleFocusWords({ targets: selection.practice, recentAiTargets: history.generations, topic: 'auto' });
+    assert.ok(focus.length <= 4);
+  }
+  stored.key = 'flashdesk-ai-history'; stored.value = JSON.stringify(history);
+  assert.equal(typeof window.FlashStore.load, 'function'); // the formal store is present...
+  assert.equal(typeof window.FlashStore.gradeCard, 'function'); // ...with its review-mutation entry point
+  assert.equal(fs.readFileSync(dataFile, 'utf8'), before); // ...and the file it owns is untouched
+  assert.equal(JSON.parse(fs.readFileSync(dataFile, 'utf8')).cards.length, 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('latest actual Sentence targets are available for Article reinforcement', () => {
   const history = { generations: [
     { type: 'sentences', targetWords: ['approach'] },
@@ -106,25 +284,60 @@ test('Article preview saves only from the explicit save button', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.doesNotMatch(generate, /ArticleStore\.create/);
 });
-test('Article translation is requested only after the explicit button click', () => {
+test('Today Article no longer offers a whole-article translation request', () => {
   const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
-  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
-  assert.match(render, /data-ai-translate-article/);
+  assert.doesNotMatch(render, /data-ai-translate-article|查看参考翻译|全文翻译|整体翻译/);
   assert.doesNotMatch(render, /aiFetch\(/);
-  assert.match(toggle, /buildArticleTranslationRequest/);
-  assert.match(toggle, /aiFetch\('\/ai'/);
+  assert.equal(typeof Ai.buildArticleTranslationRequest, 'function'); // the task itself stays intact
+  assert.doesNotMatch(appSource, /toggleAiArticleTranslation/);
 });
-test('Article translation uses a session cache and repeated expansion does not request AI again', () => {
-  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
-  assert.ok(toggle.indexOf('translationCache.get(cacheKey)') < toggle.indexOf("aiFetch('/ai'"));
-  assert.match(toggle, /aiArticleTranslationAligned\(cached, paragraphs\.length\)/);
-  assert.match(toggle, /translationExpanded = !state\.ai\.translationExpanded/);
-  assert.match(toggle, /translationCache\.set\(cacheKey, response\.data\)/);
+test('paragraph translations come from the generated Article instead of a second AI call', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.match(render, /aiArticlePreviewContentHtml\(preview\.data\.content, lookup, preview\.data\.paragraphTranslations\)/);
+  const content = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.doesNotMatch(content, /aiFetch\(|translationCache/);
+  assert.match(content, /normalizeParagraphTranslations\(translations/);
 });
-test('Article translation failure preserves the English preview and learning data', () => {
-  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
-  assert.match(toggle, /translationError = err\.message/);
-  assert.doesNotMatch(toggle, /state\.ai\.preview\s*=\s*null|ArticleStore|FlashStore|rememberAiGeneration|gradeCard/);
+test('opening one paragraph translation never opens the others', () => {
+  const handler = aiRootClickHandler(appSource);
+  const branch = handler.slice(handler.indexOf('dataset.aiParagraphTranslation'));
+  assert.match(branch, /state\.ai\.revealedParagraphs\.has\(index\)/);
+  assert.match(branch, /state\.ai\.revealedParagraphs\.add\(index\)/);
+  assert.match(branch, /state\.ai\.revealedParagraphs\.delete\(index\)/);
+  const toggleBranch = branch.slice(0, branch.indexOf('data.aiAddSentence'));
+  assert.doesNotMatch(toggleBranch, /revealedParagraphs = new Set|revealedParagraphs\.clear/);
+});
+test('a regenerated Article clears every previous paragraph expansion', () => {
+  const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf("$('#ai-root').addEventListener('click'"));
+  assert.match(generate, /if \(type === 'article'\) state\.ai\.revealedParagraphs = new Set\(\)/);
+});
+test('saving to the reading library carries the paragraph translations with the Article', () => {
+  const handler = aiRootClickHandler(appSource);
+  const branch = handler.slice(handler.indexOf('data-ai-save-article'));
+  assert.match(branch, /paragraphTranslations: preview\.data\.paragraphTranslations/);
+  assert.match(branch, /content: preview\.data\.content/);
+  assert.match(branch, /ArticleStore\.create/);
+});
+test('Article generation and display keep the Stage 1 focus words untouched', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.match(render, /aiTargetHtml\(preview\.data\.targetWordsUsed\.map\(\(front\) => \(\{ front \}\)\), '本篇重点词'\)/);
+  const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
+  assert.match(generate, /selectArticleFocusWords\(/);
+  assert.match(generate, /rememberAiGeneration\(type, historyTargets, article \? '' : requestTargets\[0\]\?\.front\)/);
+});
+test('paragraph narration survives the per-paragraph translation controls', () => {
+  const content = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(content, /data-ai-narrate-paragraph="\$\{paragraphIndex\}"/);
+  assert.match(content, /▶ 本段朗读/);
+  assert.ok(content.indexOf('data-ai-narrate-paragraph') < content.indexOf('data-ai-paragraph-translation'));
+  const narration = appSource.slice(appSource.indexOf('const AI_SENTENCE_PAUSE_MS'), appSource.indexOf('function aiSettingsHtml'));
+  assert.match(narration, /data-ai-article-paragraph/);
+  assert.doesNotMatch(narration, /revealedParagraphs|paragraphTranslations/);
+});
+test('paragraph translations never leak into lookup_word', () => {
+  const lookup = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
+  assert.doesNotMatch(lookup, /paragraphTranslations|revealedParagraphs|translationCache/);
+  assert.doesNotMatch(Ai.buildLookupWordRequest('evaluation', 'An evaluation helps.').context ? JSON.stringify(Ai.buildLookupWordRequest('evaluation', 'An evaluation helps.')) : '', /paragraphTranslations/);
 });
 test('generated Article renders clickable word tokens while punctuation remains outside', () => {
   const render = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
@@ -182,24 +395,36 @@ test('narration highlight follows the current paragraph and clears on stop', () 
   assert.match(stop, /narrationParagraphIndex = null/);
   assert.match(stop, /refreshAiArticleNarrationUi/);
 });
-test('reference translation renders beside each corresponding English paragraph before Article actions', () => {
+test('each paragraph translation renders under its own paragraph and before Article actions', () => {
   const paragraphs = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
   assert.match(paragraphs, /ai-translation-row/);
-  assert.match(paragraphs, /translation\.paragraphsZh\[paragraphIndex\]/);
+  assert.match(paragraphs, /aligned\[paragraphIndex\]/);
   assert.match(paragraphs, /data-ai-article-word/);
-  assert.doesNotMatch(paragraphs, /data-ai-article-word[^\n]+paragraphsZh/);
   assert.ok(paragraphs.indexOf('ai-article-paragraph') < paragraphs.indexOf('ai-article-translation'));
+  assert.match(paragraphs, /data-ai-paragraph-translation="\$\{paragraphIndex\}"/);
+  // One row per paragraph: the translation must live inside the same mapped section.
+  assert.equal(paragraphs.match(/<section class="ai-translation-row">/g).length, 1);
   const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
   assert.ok(render.indexOf('aiArticlePreviewContentHtml') < render.indexOf('data-ai-narrate-article'));
 });
-test('bilingual Article layout stacks each Chinese paragraph after English on mobile', () => {
-  assert.match(stylesSource, /ai-translation-row\.is-bilingual[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/);
-  assert.match(stylesSource, /@media \(max-width: 700px\)[\s\S]*?ai-translation-row\.is-bilingual[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+test('paragraph translation toggle labels switch between 查看本段翻译 and 收起本段翻译', () => {
+  const paragraphs = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(paragraphs, /查看本段翻译/);
+  assert.match(paragraphs, /收起本段翻译/);
+  assert.match(paragraphs, /aria-expanded="\$\{expanded \? 'true' : 'false'\}"/);
+  assert.match(paragraphs, /const expanded = Boolean\(translationZh\) && state\.ai\.revealedParagraphs\.has\(paragraphIndex\)/);
 });
-test('Article translation alignment is checked before it enters the session cache', () => {
-  const toggle = appSource.slice(appSource.indexOf('async function toggleAiArticleTranslation'), appSource.indexOf('/* ---------- articles'));
-  assert.ok(toggle.indexOf('aiArticleTranslationAligned(response.data') < toggle.indexOf('translationCache.set'));
-  assert.match(toggle, /参考翻译段落未能正确对齐，请重试/);
+test('paragraph translations stay hidden until the learner asks for one', () => {
+  const paragraphs = appSource.slice(appSource.indexOf('function aiArticlePreviewContentHtml'), appSource.indexOf('function aiArticleSentenceAt'));
+  assert.match(paragraphs, /\$\{expanded \? `<div class="ai-article-translation"/);
+  assert.doesNotMatch(paragraphs, /is-bilingual/);
+  assert.match(paragraphs, /translationZh \? `<button class="btn ai-paragraph-translate"/);
+});
+test('paragraph translation layout stacks under the English and keeps buttons side by side at 375px', () => {
+  assert.match(stylesSource, /\.ai-article-translation \{[^}]*border-left:/);
+  assert.doesNotMatch(stylesSource, /ai-translation-row\.is-bilingual/);
+  assert.match(stylesSource, /@media \(max-width: 560px\)[\s\S]*?\.ai-paragraph-actions \{ flex-wrap: nowrap;/);
+  assert.match(stylesSource, /\.ai-paragraph-narrate, \.ai-paragraph-translate \{ flex: 1 1 0;[\s\S]*?white-space: nowrap;/);
 });
 test('Today Article narration offers normal and slow rates with one active queue', () => {
   const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
@@ -234,7 +459,7 @@ test('Today Article keeps the save behavior with lower-priority wording', () => 
   const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
   assert.match(render, /data-ai-save-article>保存到阅读库/);
   assert.doesNotMatch(render, /data-ai-save-article[^>]*btn-primary/);
-  assert.match(appSource, /ArticleStore\.create\(\{ title: preview\.data\.title, content: preview\.data\.content/);
+  assert.match(appSource, /ArticleStore\.create\(\{[\s\S]*?title: preview\.data\.title, content: preview\.data\.content/);
 });
 test('AI generation does not call FlashStore or mutate review progress', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
@@ -247,9 +472,10 @@ test('A/B experiment UI and request helpers have been removed', () => {
 });
 test('existing Sentence duplicate uses the current exact-front helper', () => assert.match(appSource, /FlashArticleUtils\.sentenceExists\(state\.cards, sentence\.english\)/));
 test('AI pronunciation reuses playEnglish', () => assert.match(appSource, /playEnglish\(button\.dataset\.aiSpeak/));
-test('Today Sentence keeps five internal candidates but sends only primary and optional secondary', () => {
+test('Today Sentence rotates its primary through history and sends only primary and optional secondary', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
-  assert.match(generate, /sentenceTargetCount\(\)/);
+  assert.match(generate, /FlashAiLearning\.sentencePracticeSelection\(/);
+  assert.match(generate, /recentAiTargets: aiHistory\.generations/);
   assert.match(generate, /sentencePracticeTargets\(state\.ai\.targets\)/);
   assert.match(generate, /\{ count: 1 \}/);
 });
@@ -263,6 +489,21 @@ test('Today Sentence renders one card with primary and optional secondary labels
   assert.match(render, /换一句/);
   assert.doesNotMatch(render, /生成 3 条长句/);
 });
+test('Today Sentence shows 主目标词 and 顺带复习 without exposing the candidate pool', () => {
+  const section = appSource.slice(appSource.indexOf('function aiSentenceFocusHtml'), appSource.indexOf('function interactiveWordHtml'));
+  assert.match(section, /主目标词/);
+  assert.match(section, /顺带复习/);
+  assert.match(section, /sentencePracticeTargets/);
+  assert.doesNotMatch(section, /candidateCount|候选/);
+  const render = appSource.slice(appSource.indexOf('function renderAiSentences'), appSource.indexOf('function renderAiArticle'));
+  assert.doesNotMatch(render, /candidateCount/);
+});
+test('Today Article shows 本篇重点词 and never the internal candidate pool', () => {
+  const render = appSource.slice(appSource.indexOf('function renderAiArticle'), appSource.indexOf('function renderAiView'));
+  assert.match(render, /本篇重点词/);
+  assert.equal(render.match(/aiTargetHtml\(state\.ai\.targets, '本篇重点词'\)/g).length, 1);
+  assert.doesNotMatch(render, /candidateCount|候选池|候选重点词/);
+});
 test('AI history prefers actually used Sentence words and falls back to candidates', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.match(generate, /result\.data\.sentences\[0\]\?\.targetWordsUsed/);
@@ -271,7 +512,8 @@ test('AI history prefers actually used Sentence words and falls back to candidat
 test('Article generation uses latest Sentence practice as an optional preference', () => {
   const generate = appSource.slice(appSource.indexOf('async function generateAi'), appSource.indexOf('/* ---------- articles'));
   assert.match(generate, /article \? FlashAiLearning\.latestSentencePrimaryTarget\(aiHistory\) : ''/);
-  assert.match(generate, /article \? FlashAiLearning\.articleTargetCount\(\)/);
+  assert.match(generate, /aiTargets\(FlashAiLearning\.articleTargetCount\(\)\)/);
+  assert.match(generate, /selectArticleFocusWords\(\{ targets: state\.ai\.targets, recentAiTargets: aiHistory\.generations, topic: state\.ai\.topic, articlePrimary: recentPrimary \}\)/);
 });
 test('frontend has no provider-specific conditional', () => assert.doesNotMatch(appSource, /if\s*\(\s*provider\s*===\s*['"]zhipu/));
 test('lookup_word uses the provider-neutral request schema', () => assert.equal(Ai.buildLookupWordRequest('evaluation', 'An evaluation helps.').task, 'lookup_word'));

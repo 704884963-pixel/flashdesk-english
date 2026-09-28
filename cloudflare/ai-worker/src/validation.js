@@ -12,6 +12,17 @@ const nonempty = (value) => typeof value === 'string' && Boolean(value.trim());
 const words = (value) => Array.isArray(value) && value.every(nonempty);
 export const englishWordCount = (value) => (String(value || '').match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
 
+// Paragraph splitting must match the front end exactly (FlashArticleUtils
+// .splitParagraphs): a blank line separates paragraphs, and single newlines
+// inside a paragraph collapse to a space. Alignment is checked against this
+// count so a translation can never silently drift onto the wrong paragraph.
+export const englishParagraphCount = (value) => String(value ?? '')
+  .replace(/\r\n?/g, '\n').trim()
+  .split(/\n[\t ]*\n+/)
+  .map((paragraph) => paragraph.trim().replace(/\n+/g, ' '))
+  .filter(Boolean)
+  .length;
+
 export function validateAiData(task, data, context = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid AI output');
   if (task === 'lookup_word') {
@@ -37,7 +48,19 @@ export function validateAiData(task, data, context = {}) {
   if (!nonempty(data.title) || !nonempty(data.content) || !words(data.targetWordsUsed)) throw new Error('invalid article');
   const wordCount = englishWordCount(data.content);
   if (wordCount < 200 || wordCount > 300) throw new Error('invalid article length');
-  return { title: data.title.trim(), content: data.content.trim(), targetWordsUsed: data.targetWordsUsed.map((w) => w.trim()) };
+  const content = data.content.trim();
+  // paragraphTranslations is required from the model and must line up one-to-one
+  // with the paragraphs the model actually wrote. The front end still treats the
+  // field as optional, so older or third-party payloads keep loading.
+  if (!words(data.paragraphTranslations) || !data.paragraphTranslations.length) throw new Error('invalid article translations');
+  const paragraphTranslations = data.paragraphTranslations.map((paragraph) => paragraph.trim());
+  if (paragraphTranslations.length !== englishParagraphCount(content)) throw new Error('article paragraph translations do not align');
+  return {
+    title: data.title.trim(),
+    content,
+    targetWordsUsed: data.targetWordsUsed.map((w) => w.trim()),
+    paragraphTranslations,
+  };
 }
 
 export function parseAiOutput(task, content, context = {}) {

@@ -22,12 +22,14 @@ const state = {
     mode: 'list', current: null, parsed: null, error: '',
     cache: new Map(), observer: null, saveTimer: null, pendingProgress: null,
     returnToId: null, unknownWords: new Set(),
+    revealedParagraphs: new Set(),
+    narrationId: 0, narrationRate: null, narrationParagraphIndex: null,
   },
   ai: {
-    mode: 'home', loading: false, error: '', preview: null, targets: [],
-    revealed: new Set(), service: null, topic: 'auto', difficulty: 'medium',
+    mode: 'home', loading: false, error: '', preview: null, targets: [], candidateCount: 0,
+    lastSecondary: '', lastSecondaryCombo: '',
+    revealed: new Set(), revealedParagraphs: new Set(), service: null, topic: 'auto', difficulty: 'medium',
     lookupCache: new Map(), requestTiming: null,
-    translationCache: new Map(), translationLoading: false, translationError: '', translationExpanded: false,
     narrationId: 0, narrationRate: null, narrationSpeed: 1,
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
   },
@@ -1769,9 +1771,10 @@ function saveAiSettings(endpoint, token) {
   try { localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)); } catch { /* private mode */ }
 }
 
-function rememberAiGeneration(type, targets) {
+function rememberAiGeneration(type, targets, primary = '') {
   const targetWords = targets.map((item) => typeof item === 'string' ? item : item.front);
-  aiHistory = FlashAiLearning.recordAiGeneration(aiHistory, { type, targetWords });
+  const primaryWord = primary || (typeof targets[0] === 'string' ? targets[0] : targets[0]?.front) || '';
+  aiHistory = FlashAiLearning.recordAiGeneration(aiHistory, { type, targetWords, primary: primaryWord });
   try { localStorage.setItem(AI_HISTORY_KEY, JSON.stringify(aiHistory)); } catch { /* private mode */ }
 }
 
@@ -1871,8 +1874,7 @@ function aiSentenceFocusHtml(targets, usedWords = []) {
   const practice = FlashAiLearning.sentencePracticeTargets(targets);
   const primary = practice[0];
   if (!primary) return '';
-  const used = new Set((usedWords || []).map(FlashAiLearning.wordKey));
-  const secondary = practice[1] && used.has(FlashAiLearning.wordKey(practice[1].front)) ? practice[1] : null;
+  const secondary = practice[1] || null;
   return `${aiTargetHtml([primary], '主目标词')}${secondary ? aiTargetHtml([secondary], '顺带复习') : ''}`;
 }
 
@@ -1895,35 +1897,33 @@ function aiSentenceTextHtml(sentence, index, lookup) {
   });
 }
 
-function aiArticlePreviewContentHtml(content, lookup, translation = null, expanded = false) {
+// Paragraph translations travel with the generated Article, so the learner can
+// reveal one paragraph at a time instead of the whole text. Each paragraph owns
+// its own toggle: opening one never opens another, and translations start
+// hidden so the English is read first.
+function aiArticlePreviewContentHtml(content, lookup, translations = []) {
   const analysis = FlashArticleUtils.analyzeArticle(content);
-  const bilingual = expanded && aiArticleTranslationAligned(translation, analysis.paragraphs.length);
-  return analysis.paragraphs.map((paragraph, paragraphIndex) => `<section class="ai-translation-row${bilingual ? ' is-bilingual' : ''}">
+  const aligned = FlashArticleUtils.normalizeParagraphTranslations(translations, analysis.paragraphs.length);
+  return analysis.paragraphs.map((paragraph, paragraphIndex) => {
+    const translationZh = aligned[paragraphIndex] || '';
+    const expanded = Boolean(translationZh) && state.ai.revealedParagraphs.has(paragraphIndex);
+    return `<section class="ai-translation-row">
     <div class="ai-article-paragraph${state.ai.narrationParagraphIndex === paragraphIndex ? ' is-narrating' : ''}" data-ai-article-paragraph="${paragraphIndex}">
-      <div class="ai-paragraph-actions"><button class="btn ai-paragraph-narrate" type="button" data-ai-narrate-paragraph="${paragraphIndex}">${state.ai.narrationMode === 'paragraph' && state.ai.narrationParagraphIndex === paragraphIndex ? '■ 停止朗读' : '▶ 本段朗读'}</button></div>
+      <div class="ai-paragraph-actions"><button class="btn ai-paragraph-narrate" type="button" data-ai-narrate-paragraph="${paragraphIndex}">${state.ai.narrationMode === 'paragraph' && state.ai.narrationParagraphIndex === paragraphIndex ? '■ 停止朗读' : '▶ 本段朗读'}</button>${translationZh ? `<button class="btn ai-paragraph-translate" type="button" data-ai-paragraph-translation="${paragraphIndex}" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? '收起本段翻译' : '查看本段翻译'}</button>` : ''}</div>
       <p>${paragraph.sentences.map((sentence) => interactiveWordHtml(sentence.text, (token) => {
     const learned = lookup.has(FlashArticleUtils.wordKey(token.text));
     return `<span class="article-word${learned ? ' learned' : ''}" data-ai-article-word="${esc(token.text)}" data-ai-article-sentence-index="${sentence.index}">${esc(token.text)}</span>`;
   })).join(' ')}</p>
     </div>
-    ${bilingual ? `<div class="ai-article-translation" lang="zh-CN"><div class="micro-label">参考翻译 · 第 ${paragraphIndex + 1} 段</div><p>${esc(translation.paragraphsZh[paragraphIndex])}</p></div>` : ''}
-  </section>`).join('');
+    ${expanded ? `<div class="ai-article-translation" lang="zh-CN" data-ai-paragraph-translation-body="${paragraphIndex}"><div class="micro-label">参考翻译 · 第 ${paragraphIndex + 1} 段</div><p>${esc(translationZh)}</p></div>` : ''}
+  </section>`;
+  }).join('');
 }
 
 function aiArticleSentenceAt(content, index) {
   return FlashArticleUtils.analyzeArticle(content).paragraphs
     .flatMap((paragraph) => paragraph.sentences)
     .find((sentence) => sentence.index === Number(index))?.text || '';
-}
-
-function aiArticleTranslationKey(article) {
-  return `${String(article?.title || '').trim()}\n${String(article?.content || '').trim()}`;
-}
-
-function aiArticleTranslationAligned(translation, paragraphCount) {
-  return typeof translation?.titleZh === 'string'
-    && Array.isArray(translation.paragraphsZh)
-    && translation.paragraphsZh.length === paragraphCount;
 }
 
 const AI_SENTENCE_PAUSE_MS = 350;
@@ -2093,17 +2093,15 @@ function renderAiArticle() {
   const preview = state.ai.preview?.type === 'article' ? state.ai.preview : null;
   const words = preview ? FlashArticleUtils.wordTokens(preview.data.content).length : 0;
   const lookup = FlashArticleUtils.buildWordLookup(state.cards);
-  const translation = preview ? state.ai.translationCache.get(aiArticleTranslationKey(preview.data)) : null;
-  const translationReady = preview && aiArticleTranslationAligned(translation, FlashArticleUtils.splitParagraphs(preview.data.content).length);
   $('#ai-root').innerHTML = `<div class="ai-page"><button class="article-back" type="button" data-ai-home>← 返回</button><header class="ai-head"><h2>今日短文</h2><p>生成自然、完整的个性化英文阅读材料。</p></header>
     <div class="panel ai-options"><label class="field"><span class="micro-label">Topic</span><select id="ai-topic"><option value="auto">自动</option><option value="ai-tech">AI与科技</option><option value="work">工作</option><option value="travel">旅行</option><option value="daily">日常生活</option><option value="business">商业经济</option></select></label>
     <label class="field"><span class="micro-label">Difficulty</span><select id="ai-difficulty"><option value="easy">简单</option><option value="medium">适中</option></select></label></div>
-    ${aiTargetHtml(state.ai.targets, '本篇重点词')}
+    ${preview ? '' : aiTargetHtml(state.ai.targets, '本篇重点词')}
     <div class="form-actions"><button type="button" class="btn btn-primary" data-ai-generate-article ${state.ai.loading ? 'disabled' : ''}>${state.ai.loading ? '正在生成…' : preview ? '重新生成' : '生成短文'}</button></div>
     ${state.ai.error ? `<p class="ai-error">${esc(state.ai.error)}</p>` : ''}
-    ${preview ? `<article class="panel ai-article-preview"><h3>${esc(preview.data.title)}</h3>${state.ai.translationExpanded && translationReady ? `<div class="ai-article-title-translation">${esc(translation.titleZh)}</div>` : ''}<div class="micro-label">约 ${words} words</div>${aiTargetHtml(preview.data.targetWordsUsed.map((front) => ({ front })), '本篇重点词')}<div class="ai-article-content${state.ai.translationExpanded && translationReady ? ' is-bilingual' : ''}">${aiArticlePreviewContentHtml(preview.data.content, lookup, translation, state.ai.translationExpanded && translationReady)}</div>
-      ${state.ai.translationError ? `<p class="ai-error">参考翻译生成失败：${esc(state.ai.translationError)}</p>` : ''}
-      <div class="form-actions"><button class="btn btn-primary" type="button" data-ai-narrate-article data-rate="1">${state.ai.narrationMode === 'article' && state.ai.narrationRate === 1 ? '■ 停止朗读' : '▶ 整篇朗读'}</button><button class="btn" type="button" data-ai-narrate-article data-rate="0.75">${state.ai.narrationMode === 'article' && state.ai.narrationRate === 0.75 ? '■ 停止朗读' : '🐢 慢速朗读'}</button><button class="btn" type="button" data-ai-translate-article ${state.ai.translationLoading ? 'disabled' : ''}>${state.ai.translationLoading ? '正在生成参考翻译...' : state.ai.translationExpanded ? '收起参考翻译' : '查看参考翻译'}</button><button class="btn" type="button" data-ai-save-article>保存到阅读库</button><button class="btn" type="button" data-ai-generate-article>重新生成</button></div>
+    ${preview ? `<article class="panel ai-article-preview"><h3>${esc(preview.data.title)}</h3><div class="micro-label">约 ${words} words</div>${aiTargetHtml(preview.data.targetWordsUsed.map((front) => ({ front })), '本篇重点词')}<div class="ai-article-content">${aiArticlePreviewContentHtml(preview.data.content, lookup, preview.data.paragraphTranslations)}</div>
+
+      <div class="form-actions"><button class="btn btn-primary" type="button" data-ai-narrate-article data-rate="1">${state.ai.narrationMode === 'article' && state.ai.narrationRate === 1 ? '■ 停止朗读' : '▶ 整篇朗读'}</button><button class="btn" type="button" data-ai-narrate-article data-rate="0.75">${state.ai.narrationMode === 'article' && state.ai.narrationRate === 0.75 ? '■ 停止朗读' : '🐢 慢速朗读'}</button><button class="btn" type="button" data-ai-save-article>保存到阅读库</button><button class="btn" type="button" data-ai-generate-article>重新生成</button></div>
       </article>${aiUsageHtml(preview.usage)}` : ''}${aiSettingsHtml()}</div>`;
   const topic = $('#ai-topic'); const difficulty = $('#ai-difficulty');
   if (topic) topic.value = state.ai.topic; if (difficulty) difficulty.value = state.ai.difficulty;
@@ -2119,12 +2117,27 @@ async function generateAi(type) {
   if (state.ai.loading) return;
   if (type === 'article') stopAiArticleNarration(false);
   state.ai.loading = true; state.ai.error = ''; state.ai.preview = null; state.ai.revealed = new Set();
-  if (type === 'article') { state.ai.translationLoading = false; state.ai.translationError = ''; state.ai.translationExpanded = false; }
+  // A fresh Article starts with every paragraph translation collapsed.
+  if (type === 'article') state.ai.revealedParagraphs = new Set();
   const article = type === 'article';
+  // Today Sentence rotates its primary through the existing AI history; Today
+  // Article picks up where the latest Sentence round left off so the learner
+  // meets the same word again in reading.
   const recentPrimary = article ? FlashAiLearning.latestSentencePrimaryTarget(aiHistory) : '';
-  const preferredWords = recentPrimary ? [recentPrimary] : [];
-  state.ai.targets = aiTargets(article ? FlashAiLearning.articleTargetCount() : FlashAiLearning.sentenceTargetCount(), preferredWords);
-  const requestTargets = article ? FlashAiLearning.articlePracticeTargets(state.ai.targets) : FlashAiLearning.sentencePracticeTargets(state.ai.targets);
+  if (article) {
+    state.ai.targets = aiTargets(FlashAiLearning.articleTargetCount());
+    state.ai.candidateCount = state.ai.targets.length;
+  } else {
+    const selection = FlashAiLearning.sentencePracticeSelection({
+      cards: state.cards, history: state.history, recentAiTargets: aiHistory.generations,
+      now: Date.now(), today: { lastSecondary: state.ai.lastSecondary, lastSecondaryCombo: state.ai.lastSecondaryCombo },
+    });
+    state.ai.targets = selection.practice;
+    state.ai.candidateCount = selection.candidateCount;
+  }
+  const requestTargets = article
+    ? FlashAiLearning.selectArticleFocusWords({ targets: state.ai.targets, recentAiTargets: aiHistory.generations, topic: state.ai.topic, articlePrimary: recentPrimary })
+    : FlashAiLearning.sentencePracticeTargets(state.ai.targets);
   renderAiView();
   try {
     const task = article ? 'generate_article' : 'generate_sentences';
@@ -2139,38 +2152,13 @@ async function generateAi(type) {
     const historyTargets = article
       ? (usedTargets?.length ? usedTargets : requestTargets)
       : FlashAiLearning.sentenceHistoryTargets(usedTargets, requestTargets);
-    rememberAiGeneration(type, historyTargets);
+    rememberAiGeneration(type, historyTargets, article ? '' : requestTargets[0]?.front);
+    if (!article && requestTargets[0]) {
+      state.ai.lastSecondary = requestTargets[1]?.front || '';
+      state.ai.lastSecondaryCombo = requestTargets[1] ? `${requestTargets[0].front}+${requestTargets[1].front}` : '';
+    }
   } catch (err) { state.ai.error = err.message; }
   finally { state.ai.loading = false; renderAiView(); }
-}
-
-async function toggleAiArticleTranslation() {
-  const preview = state.ai.preview;
-  if (!preview || preview.type !== 'article' || state.ai.translationLoading) return;
-  const cacheKey = aiArticleTranslationKey(preview.data);
-  const paragraphs = FlashArticleUtils.splitParagraphs(preview.data.content);
-  const cached = state.ai.translationCache.get(cacheKey);
-  if (aiArticleTranslationAligned(cached, paragraphs.length)) {
-    state.ai.translationExpanded = !state.ai.translationExpanded;
-    state.ai.translationError = '';
-    return renderAiArticle();
-  }
-  state.ai.translationCache.delete(cacheKey);
-  state.ai.translationLoading = true; state.ai.translationError = ''; state.ai.translationExpanded = false;
-  renderAiArticle();
-  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
-  try {
-    const request = FlashAiLearning.buildArticleTranslationRequest(preview.data.title, paragraphs);
-    const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
-    if (!aiArticleTranslationAligned(response.data, paragraphs.length)) {
-      throw new Error('参考翻译段落未能正确对齐，请重试。');
-    }
-    state.ai.translationCache.set(cacheKey, response.data);
-    state.ai.translationExpanded = true;
-    state.ai.service = { provider: response.provider, model: response.model };
-    rememberAiTiming('translate_article', response, started);
-  } catch (err) { state.ai.translationError = err.message; }
-  finally { state.ai.translationLoading = false; renderAiArticle(); }
 }
 
 /* ---------- articles ---------- */
@@ -2290,6 +2278,33 @@ function articleSentenceHtml(sentence, lookup) {
   return `<span class="article-sentence" data-sentence-index="${sentence.index}" data-sentence-text="${esc(sentence.text)}">${html}</span>`;
 }
 
+// Reading paragraphs share the exact same splitter as the AI Today Article, so a
+// four-paragraph article stays four paragraphs after it is saved to the library.
+// Each paragraph carries its own lightweight toolbar; the Chinese help is only
+// offered when the Article actually stored an aligned translation for it.
+function articleParagraphToolbarHtml(paragraphIndex, hasTranslation) {
+  const narrating = state.article.narrationParagraphIndex === paragraphIndex;
+  return `<div class="article-paragraph-actions">
+      <button type="button" class="btn article-paragraph-narrate" data-article-narrate-paragraph="${paragraphIndex}" data-rate="1">${narrating && state.article.narrationRate === 1 ? '■ 停止' : '▶ 本段朗读'}</button>
+      <button type="button" class="btn article-paragraph-narrate" data-article-narrate-paragraph="${paragraphIndex}" data-rate="0.75">🐢 慢速</button>
+      ${hasTranslation ? `<button type="button" class="btn article-paragraph-translate" data-article-paragraph-translation="${paragraphIndex}" aria-expanded="${state.article.revealedParagraphs.has(paragraphIndex) ? 'true' : 'false'}">${state.article.revealedParagraphs.has(paragraphIndex) ? '收起本段翻译' : '查看本段翻译'}</button>` : ''}
+    </div>`;
+}
+
+function articleParagraphRowHtml(paragraph, paragraphIndex, lookup, translations) {
+  const translationZh = translations[paragraphIndex] || '';
+  const expanded = Boolean(translationZh) && state.article.revealedParagraphs.has(paragraphIndex);
+  const english = paragraph.sentences
+    .map((sentence) => articleSentenceHtml(sentence, lookup)).join(' ');
+  return `<section class="article-paragraph-row">
+    <div class="article-paragraph${state.article.narrationParagraphIndex === paragraphIndex ? ' is-narrating' : ''}" data-article-paragraph="${paragraphIndex}">
+      <p class="article-paragraph-text">${english}</p>
+      ${articleParagraphToolbarHtml(paragraphIndex, Boolean(translationZh))}
+    </div>
+    ${expanded ? `<div class="article-paragraph-translation" lang="zh-CN" data-article-paragraph-translation-body="${paragraphIndex}"><div class="micro-label">参考翻译 · 第 ${paragraphIndex + 1} 段</div><p>${esc(translationZh)}</p></div>` : ''}
+  </section>`;
+}
+
 function renderArticleReader() {
   const article = state.article.current;
   if (!article) return renderArticleHome();
@@ -2297,8 +2312,9 @@ function renderArticleReader() {
   state.article.parsed = metrics.analysis;
   const sourceLine = [article.source, articleDate(article.publishedAt)].filter(Boolean).join(' · ');
   const progress = Math.min(100, Math.max(0, Number(article.progressPercent) || 0));
-  const paragraphs = metrics.analysis.paragraphs.map((paragraph) => `<p>${paragraph.sentences
-    .map((sentence) => articleSentenceHtml(sentence, metrics.lookup)).join(' ')}</p>`).join('');
+  const translations = FlashArticleUtils.normalizeParagraphTranslations(article.paragraphTranslations, metrics.analysis.paragraphs.length);
+  const paragraphs = metrics.analysis.paragraphs
+    .map((paragraph, index) => articleParagraphRowHtml(paragraph, index, metrics.lookup, translations)).join('');
   $('#article-root').innerHTML = `<article class="article-reader">
     <header class="article-reader-head">
       <button type="button" class="article-back" data-article-list>← 返回</button>
@@ -2332,6 +2348,10 @@ async function openArticle(id) {
     const article = await ArticleStore.get(id);
     const index = state.articles.findIndex((item) => item.id === article.id);
     if (index === -1) state.articles.push(article); else state.articles[index] = article;
+    // A different Article always starts fully collapsed; expansion is pure UI
+    // state and is never persisted with the Article.
+    if (state.article.current?.id !== article.id) state.article.revealedParagraphs = new Set();
+    stopArticleParagraphNarration(false);
     state.article.current = article;
     state.article.mode = 'reader';
     if (state.view !== 'reading') switchView('reading'); else renderArticleReader();
@@ -2397,6 +2417,61 @@ function startArticleProgressTracking() {
     if (visible.length) queueArticleProgress(Math.max(...visible), sentenceCount);
   }, { rootMargin: '-15% 0px -45% 0px', threshold: 0.25 });
   document.querySelectorAll('.article-sentence').forEach((sentence) => state.article.observer.observe(sentence));
+}
+
+// Reading per-paragraph narration reuses the shared playEnglish pipeline
+// (ElevenLabs worker + cache, with the project's existing system-speech
+// fallback). Rate 1 is the normal read; 0.75 is the slow read — the same two
+// rates the rest of the app already offers, so no second audio system exists.
+function refreshArticleParagraphNarrationUi() {
+  if (state.view !== 'reading' || state.article.mode !== 'reader') return;
+  document.querySelectorAll('[data-article-paragraph]').forEach((element) => {
+    element.classList.toggle('is-narrating', Number(element.dataset.articleParagraph) === state.article.narrationParagraphIndex);
+  });
+  document.querySelectorAll('[data-article-narrate-paragraph][data-rate="1"]').forEach((button) => {
+    const active = state.article.narrationRate === 1
+      && Number(button.dataset.articleNarrateParagraph) === state.article.narrationParagraphIndex;
+    button.textContent = active ? '■ 停止' : '▶ 本段朗读';
+  });
+}
+
+function stopArticleParagraphNarration(rerender = false) {
+  state.article.narrationId += 1;
+  state.article.narrationRate = null;
+  state.article.narrationParagraphIndex = null;
+  stopEnglishPlayback();
+  if (rerender) refreshArticleParagraphNarrationUi();
+}
+
+async function startArticleParagraphNarration(rate, paragraphIndex) {
+  const article = state.article.current;
+  if (!article) return;
+  const index = Number(paragraphIndex);
+  if (state.article.narrationParagraphIndex === index && state.article.narrationRate === rate) {
+    stopArticleParagraphNarration(true);
+    return;
+  }
+  stopArticleParagraphNarration(false);
+  const narrationId = state.article.narrationId;
+  state.article.narrationRate = Number(rate) === 0.75 ? 0.75 : 1;
+  state.article.narrationParagraphIndex = index;
+  const paragraphs = FlashArticleUtils.articleSpeechParagraphs(article.content);
+  const sentences = paragraphs[index] || [];
+  refreshArticleParagraphNarrationUi();
+  try {
+    for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
+      if (narrationId !== state.article.narrationId) return;
+      const result = await playEnglish(sentences[sentenceIndex], { rate: state.article.narrationRate, waitForEnd: true });
+      if (narrationId !== state.article.narrationId || ['cancelled', 'failed'].includes(result)) return;
+      if (sentenceIndex < sentences.length - 1 && !await aiNarrationPause(350, narrationId)) return;
+    }
+  } finally {
+    if (narrationId === state.article.narrationId) {
+      state.article.narrationRate = null;
+      state.article.narrationParagraphIndex = null;
+      refreshArticleParagraphNarrationUi();
+    }
+  }
 }
 
 function openArticleWord(word) {
@@ -2600,6 +2675,7 @@ function prefillArticleCard(deck, front, back = '', wordDraft = {}) {
 
 function switchView(name) {
   if (state.ai.narrationRate !== null && name !== 'ai') stopAiArticleNarration(false);
+  if (state.article.narrationRate !== null && name !== 'reading') stopArticleParagraphNarration(false);
   stopEnglishPlayback();
   if (state.view === 'reading' && name !== 'reading') {
     stopArticleProgressTracking();
@@ -2840,6 +2916,22 @@ function bindEvents() {
   });
 
   $('#article-root').addEventListener('click', async (e) => {
+    // Paragraph toolbar buttons are handled first so they can never fall through
+    // to the word / sentence lookups behind them.
+    const toolbar = e.target.closest('button[data-article-narrate-paragraph], button[data-article-paragraph-translation]');
+    if (toolbar) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (toolbar.dataset.articleNarrateParagraph !== undefined) {
+        await startArticleParagraphNarration(Number(toolbar.dataset.rate) === 0.75 ? 0.75 : 1, Number(toolbar.dataset.articleNarrateParagraph));
+      } else {
+        const index = Number(toolbar.dataset.articleParagraphTranslation);
+        if (state.article.revealedParagraphs.has(index)) state.article.revealedParagraphs.delete(index);
+        else state.article.revealedParagraphs.add(index);
+        renderArticleReader();
+      }
+      return;
+    }
     const word = e.target.closest('[data-article-word]');
     if (word) {
       e.preventDefault();
@@ -2859,7 +2951,9 @@ function bindEvents() {
       renderArticleAdd();
     } else if (button.hasAttribute('data-article-list')) {
       stopArticleProgressTracking();
+      stopArticleParagraphNarration(false);
       flushArticleProgress();
+      state.article.revealedParagraphs = new Set();
       state.article.mode = 'list';
       state.article.current = null;
       renderArticleHome();
@@ -2933,10 +3027,10 @@ function bindEvents() {
     if (!button) return;
     if (button.dataset.aiMode) {
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
-      state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.error = ''; renderAiView();
+      state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
     } else if (button.hasAttribute('data-ai-home')) {
       stopAiArticleNarration(false);
-      state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; renderAiHome();
+      state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; renderAiHome();
     } else if (button.hasAttribute('data-ai-save-settings')) {
       saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); $('#ai-service-status').textContent = 'AI 设置已保存在此设备。';
     } else if (button.hasAttribute('data-ai-test')) {
@@ -2948,8 +3042,6 @@ function bindEvents() {
       await generateAi('sentences');
     } else if (button.hasAttribute('data-ai-generate-article')) {
       state.ai.topic = $('#ai-topic')?.value || state.ai.topic; state.ai.difficulty = $('#ai-difficulty')?.value || state.ai.difficulty; await generateAi('article');
-    } else if (button.hasAttribute('data-ai-translate-article')) {
-      await toggleAiArticleTranslation();
     } else if (button.hasAttribute('data-ai-narrate-article')) {
       const rate = Number(button.dataset.rate) === 0.75 ? 0.75 : 1;
       if (state.ai.narrationMode === 'article' && state.ai.narrationRate === rate) stopAiArticleNarration(true); else await startAiArticleNarration(rate);
@@ -2966,6 +3058,10 @@ function bindEvents() {
       playEnglish(button.dataset.aiSpeak, { rate: Number(button.dataset.rate) || 1, button });
     } else if (button.dataset.aiReveal !== undefined) {
       const index = Number(button.dataset.aiReveal); if (state.ai.revealed.has(index)) state.ai.revealed.delete(index); else state.ai.revealed.add(index); renderAiSentences();
+    } else if (button.dataset.aiParagraphTranslation !== undefined) {
+      const index = Number(button.dataset.aiParagraphTranslation);
+      if (state.ai.revealedParagraphs.has(index)) state.ai.revealedParagraphs.delete(index); else state.ai.revealedParagraphs.add(index);
+      renderAiArticle();
     } else if (button.dataset.aiAddSentence !== undefined) {
       const sentence = state.ai.preview?.data.sentences[Number(button.dataset.aiAddSentence)];
       if (sentence) prefillArticleCard('Sentences', sentence.english, sentence.referenceChinese);
@@ -2974,7 +3070,13 @@ function bindEvents() {
       if (!preview || preview.type !== 'article') return;
       button.disabled = true;
       try {
-        const article = await ArticleStore.create({ title: preview.data.title, content: preview.data.content, source: 'FlashDesk AI', sourceUrl: '', publishedAt: '' });
+        // The optional paragraphTranslations field travels with the Article so
+        // Reading can offer the same per-paragraph help later.
+        const article = await ArticleStore.create({
+          title: preview.data.title, content: preview.data.content,
+          paragraphTranslations: preview.data.paragraphTranslations,
+          source: 'FlashDesk AI', sourceUrl: '', publishedAt: '',
+        });
         state.articles.push(article); state.article.cache.delete(article.id); await openArticle(article.id);
       } catch (err) { state.ai.error = `保存失败：${err.message}`; button.disabled = false; renderAiArticle(); }
     }

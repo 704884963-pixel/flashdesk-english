@@ -7,6 +7,20 @@
     return String(value ?? '').replace(/\r\n?/g, '\n').trim();
   }
 
+  // Paragraph-level Chinese translations are an OPTIONAL Article field. Older
+  // Articles have none, and a partially translated Article must not block
+  // loading, so invalid or misaligned input degrades to "no translations"
+  // rather than throwing.
+  function normalizeParagraphTranslations(value, paragraphCount) {
+    if (!Array.isArray(value)) return [];
+    const translations = value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+    if (!translations.length) return [];
+    if (Number.isFinite(paragraphCount) && translations.length !== paragraphCount) return [];
+    return translations;
+  }
+
   function normalizeArticleInput(input) {
     const title = typeof input?.title === 'string' ? input.title.trim() : '';
     const content = typeof input?.content === 'string' ? normalizeContent(input.content) : '';
@@ -22,7 +36,10 @@
         throw new Error('原文链接必须是有效的 http / https 地址');
       }
     }
-    return { title, source, sourceUrl, publishedAt, content };
+    const article = { title, source, sourceUrl, publishedAt, content };
+    const paragraphTranslations = normalizeParagraphTranslations(input?.paragraphTranslations, splitParagraphs(content).length);
+    if (paragraphTranslations.length) article.paragraphTranslations = paragraphTranslations;
+    return article;
   }
 
   function splitParagraphs(content) {
@@ -171,7 +188,7 @@
   }
 
   const FlashArticleUtils = {
-    normalizeContent, normalizeArticleInput, splitParagraphs, splitSentences,
+    normalizeContent, normalizeParagraphTranslations, normalizeArticleInput, splitParagraphs, splitSentences,
     wordTokens, wordKey, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
     normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists,
   };

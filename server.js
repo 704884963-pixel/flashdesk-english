@@ -157,6 +157,24 @@ function makeArticleId() {
   return 'a_' + Date.now() + '_' + Math.random().toString(16).slice(2, 8);
 }
 
+function articleParagraphs(content) {
+  return String(content ?? '').replace(/\r\n?/g, '\n').trim()
+    .split(/\n[\t ]*\n+/)
+    .map((paragraph) => paragraph.trim().replace(/\n+/g, ' '))
+    .filter(Boolean);
+}
+
+// OPTIONAL paragraph-level Chinese translations. Invalid, empty, or misaligned
+// input is dropped so an older Article and a partially translated one both keep
+// working; the field is only stored when it lines up one-to-one with the text.
+function normalizeParagraphTranslations(input, content) {
+  const value = Array.isArray(input) ? input : [];
+  const paragraphTranslations = value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+  if (!paragraphTranslations.length) return [];
+  if (paragraphTranslations.length !== articleParagraphs(content).length) return [];
+  return paragraphTranslations;
+}
+
 function normalizeArticleInput(input) {
   const title = typeof input?.title === 'string' ? input.title.trim() : '';
   const content = typeof input?.content === 'string' ? input.content.replace(/\r\n?/g, '\n').trim() : '';
@@ -170,7 +188,10 @@ function normalizeArticleInput(input) {
     try { url = new URL(sourceUrl); } catch { throw new Error('原文链接必须是有效的 http / https 地址'); }
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('原文链接必须是有效的 http / https 地址');
   }
-  return { title, source, sourceUrl, publishedAt, content };
+  const article = { title, source, sourceUrl, publishedAt, content };
+  const paragraphTranslations = normalizeParagraphTranslations(input?.paragraphTranslations, content);
+  if (paragraphTranslations.length) article.paragraphTranslations = paragraphTranslations;
+  return article;
 }
 
 function normalizeArticleProgress(sentenceIndex, percent) {

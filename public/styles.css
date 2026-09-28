@@ -563,6 +563,29 @@ select:focus, input:focus, textarea:focus {
   .article-word:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 }
 
+/* Per-paragraph reading toolbar. The paragraph keeps the plain article rhythm —
+   no cards — so the article never fragments; the toolbar is quiet and sits just
+   under its own English, and the Chinese help is lighter than the English. */
+.article-paragraph-row { margin: 0 0 1.5em; }
+.article-paragraph { border-radius: 10px; border: 1px solid transparent; transition: border-color .15s ease, background .15s ease; }
+.article-paragraph.is-narrating { border-color: color-mix(in srgb, var(--accent) 42%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.article-paragraph p { margin: 0; }
+.article-body .article-paragraph-row > .article-paragraph > p.article-paragraph-text { margin: 0; }
+.article-paragraph-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 0; }
+.article-paragraph-narrate, .article-paragraph-translate {
+  min-height: 32px; padding: 4px 10px; font-size: .78rem; color: var(--muted);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 999px;
+}
+.article-paragraph-narrate:hover, .article-paragraph-translate:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.article-paragraph-translation { margin: 8px 0 0 12px; padding: 2px 0 2px 12px; border-left: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); color: var(--muted); }
+.article-paragraph-translation p { margin: 4px 0 0; font-size: .95rem; line-height: 1.72; overflow-wrap: anywhere; }
+.article-paragraph-translation .micro-label { color: color-mix(in srgb, var(--accent) 72%, var(--muted)); }
+@media (max-width: 560px) {
+  .article-paragraph-actions { gap: 6px; }
+  .article-paragraph-narrate, .article-paragraph-translate { flex: 1 1 auto; min-width: 0; min-height: 36px; white-space: nowrap; padding-inline: 8px; font-size: .76rem; }
+  .article-paragraph-translation { margin-left: 8px; padding-left: 10px; }
+}
+
 /* ---- AI learning ---- */
 
 .ai-page { max-width: 860px; margin: 0 auto; }
@@ -590,19 +613,21 @@ select:focus, input:focus, textarea:focus {
 .ai-article-preview { margin-top: 16px; }
 .ai-article-preview h3 { font-family: var(--display); font-size: 1.55rem; }
 .ai-article-content { margin: 18px 0; font-size: 1.02rem; line-height: 1.75; }
-.ai-translation-row.is-bilingual { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: stretch; margin-bottom: 14px; }
-.ai-article-paragraph { margin: 0 0 1.2em; padding: 8px 10px 10px; border: 1px solid transparent; border-radius: 10px; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
-.ai-translation-row.is-bilingual .ai-article-paragraph { margin-bottom: 0; }
+.ai-translation-row { margin: 0 0 14px; }
+.ai-article-paragraph { margin: 0; padding: 8px 10px 10px; border: 1px solid transparent; border-radius: 10px; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
 .ai-article-paragraph p { margin: 0; }
 .ai-article-paragraph.is-narrating { border-color: color-mix(in srgb, var(--accent) 42%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 5%, transparent); }
-.ai-paragraph-actions { display: flex; justify-content: flex-end; margin: -2px 0 3px; }
-.ai-paragraph-narrate { min-height: 32px; padding: 5px 9px; font-size: .76rem; color: var(--muted); }
+.ai-paragraph-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin: -2px 0 3px; }
+.ai-paragraph-narrate, .ai-paragraph-translate { min-height: 32px; padding: 5px 9px; font-size: .76rem; color: var(--muted); }
 .ai-usage { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .ai-word-inline-form { display: grid; gap: 10px; padding-top: 4px; }
 .ai-word-inline-form .btn-primary { justify-self: start; }
-.ai-article-title-translation { margin: 4px 0 8px; color: var(--muted); font-size: 1rem; }
-.ai-article-translation { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
-.ai-article-translation p { margin: 4px 0 0; line-height: 1.75; overflow-wrap: anywhere; }
+/* Per-paragraph Chinese help: readable but visually lighter than the English,
+   tucked under its own paragraph with a quiet left rule instead of a card, so
+   the article never fragments into a stack of boxes. */
+.ai-article-translation { margin: 0 0 2px 10px; padding: 2px 0 2px 12px; border-left: 3px solid color-mix(in srgb, var(--accent) 38%, transparent); color: var(--muted); }
+.ai-article-translation p { margin: 4px 0 0; font-size: .95rem; line-height: 1.72; overflow-wrap: anywhere; }
+.ai-article-translation .micro-label { color: color-mix(in srgb, var(--accent) 72%, var(--muted)); }
 
 @media (max-width: 560px) {
   .ai-home-actions, .ai-settings-grid, .ai-options { grid-template-columns: minmax(0, 1fr); }
@@ -610,12 +635,15 @@ select:focus, input:focus, textarea:focus {
   .ai-word-inline-form .btn-primary { width: 100%; }
   .ai-page { min-width: 0; }
   .ai-article-paragraph { padding-inline: 7px; }
-  .ai-paragraph-narrate { min-height: 36px; }
+  /* Two paragraph actions must stay side by side: at 375px a shrinking flex
+     basis would otherwise stack them into narrow vertical slivers. */
+  .ai-paragraph-actions { flex-wrap: nowrap; gap: 6px; }
+  .ai-paragraph-narrate, .ai-paragraph-translate { flex: 1 1 0; min-width: 0; min-height: 36px; white-space: nowrap; padding-inline: 4px; font-size: .74rem; }
+  .ai-article-translation { margin-left: 7px; padding-left: 10px; }
   .nav { width: 100%; }
 }
 @media (max-width: 700px) {
-  .ai-translation-row.is-bilingual { grid-template-columns: minmax(0, 1fr); gap: 7px; }
-  .ai-article-translation { margin: 0 7px 14px; }
+  .ai-article-translation { margin-right: 7px; }
 }
 .article-action-dialog { width: min(520px, calc(100vw - 28px)); max-height: min(78vh, 680px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
 .article-action-dialog::backdrop { background: #0009; }

@@ -27,6 +27,38 @@ test('Article accepts an http source URL', () => assert.equal(Utils.normalizeArt
 test('Article accepts an https source URL', () => assert.equal(Utils.normalizeArticleInput(sample).sourceUrl, sample.sourceUrl));
 test('Article rejects a non-http source URL', () => assert.throws(() => Utils.normalizeArticleInput({ title: 't', content: 'c', sourceUrl: 'file:///tmp/a' }), /http/));
 test('Windows newlines normalize without flattening paragraphs', () => assert.equal(Utils.normalizeContent(' A\r\n\r\nB '), 'A\n\nB'));
+
+/* ---------- optional paragraph translations ---------- */
+
+const translated = { ...sample, paragraphTranslations: ['史密斯先生训练模型。', '它们有用吗？是的！'] };
+
+test('Article input keeps aligned paragraph translations as an optional field', () => {
+  const normalized = Utils.normalizeArticleInput(translated);
+  assert.deepEqual(normalized.paragraphTranslations, ['史密斯先生训练模型。', '它们有用吗？是的！']);
+  assert.equal(Utils.splitParagraphs(normalized.content).length, normalized.paragraphTranslations.length);
+});
+test('Article input omits paragraph translations entirely when they are absent', () => {
+  const normalized = Utils.normalizeArticleInput(sample);
+  assert.equal('paragraphTranslations' in normalized, false);
+  assert.equal(JSON.stringify(normalized).includes('paragraphTranslations'), false);
+});
+test('misaligned paragraph translations are dropped instead of throwing', () => {
+  const short = Utils.normalizeArticleInput({ ...sample, paragraphTranslations: ['只有一段'] });
+  assert.equal('paragraphTranslations' in short, false);
+  const extra = Utils.normalizeArticleInput({ ...sample, paragraphTranslations: ['一', '二', '三'] });
+  assert.equal('paragraphTranslations' in extra, false);
+});
+test('blank or non-string paragraph translations degrade to no translations', () => {
+  assert.deepEqual(Utils.normalizeParagraphTranslations(['  ', ''], 2), []);
+  assert.deepEqual(Utils.normalizeParagraphTranslations('not an array', 2), []);
+  assert.deepEqual(Utils.normalizeParagraphTranslations(null, 2), []);
+  assert.deepEqual(Utils.normalizeParagraphTranslations([1, 2], 2), []);
+  assert.deepEqual(Utils.normalizeParagraphTranslations([' 一段 ', '二段 '], 2), ['一段', '二段']);
+});
+test('normalizeParagraphTranslations tolerates an unknown paragraph count', () => {
+  assert.deepEqual(Utils.normalizeParagraphTranslations(['一', '二'], undefined), ['一', '二']);
+});
+
 test('paragraph splitting preserves blank-line boundaries', () => assert.deepEqual(Utils.splitParagraphs('One.\n\nTwo.\n\n\nThree.'), ['One.', 'Two.', 'Three.']));
 test('sentence splitting returns ordinary statements', () => assert.deepEqual(Utils.splitSentences('One. Two.'), ['One.', 'Two.']));
 test('sentence splitting handles questions', () => assert.deepEqual(Utils.splitSentences('Ready? Go.'), ['Ready?', 'Go.']));
@@ -262,6 +294,45 @@ test('Node ArticleStore reads the latest disk state on every list', async (t) =>
   fs.writeFileSync(h.articleFile, JSON.stringify(disk));
   assert.equal((await h.store.list()).length, 2);
 });
+test('saving an Article persists its paragraph translations and reads them back', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const created = await h.store.create(translated);
+  assert.deepEqual(created.paragraphTranslations, ['史密斯先生训练模型。', '它们有用吗？是的！']);
+  const reloaded = await h.store.get(created.id);
+  assert.deepEqual(reloaded.paragraphTranslations, ['史密斯先生训练模型。', '它们有用吗？是的！']);
+  assert.equal(reloaded.content, translated.content);
+});
+test('an Article saved without translations round-trips with no new field', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const created = await h.store.create(sample);
+  assert.equal('paragraphTranslations' in created, false);
+  const reloaded = await h.store.get(created.id);
+  assert.equal('paragraphTranslations' in reloaded, false);
+  assert.equal(reloaded.content, sample.content);
+});
+test('an existing Article on disk without translations still lists and loads', async (t) => {
+  const h = await nodeArticleHarness(t);
+  // Simulate an Article written before the field existed.
+  fs.mkdirSync(path.dirname(h.articleFile), { recursive: true });
+  fs.writeFileSync(h.articleFile, JSON.stringify({
+    articles: [{ id: 'legacy_1', ...sample, createdAt: 1, updatedAt: 1, lastReadAt: null, progressSentenceIndex: 0, progressPercent: 0 }],
+    unknownWords: [],
+  }));
+  const legacy = await h.store.get('legacy_1');
+  assert.equal(legacy.title, sample.title);
+  assert.equal(legacy.content, sample.content);
+  assert.equal(Utils.splitParagraphs(legacy.content).length, 2);
+  assert.equal('paragraphTranslations' in legacy, false);
+  assert.equal((await h.store.list()).length, 1);
+});
+test('Article progress updates preserve already saved paragraph translations', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const created = await h.store.create(translated);
+  await h.store.updateProgress(created.id, { progressSentenceIndex: 1, progressPercent: 50 });
+  const reloaded = await h.store.get(created.id);
+  assert.deepEqual(reloaded.paragraphTranslations, ['史密斯先生训练模型。', '它们有用吗？是的！']);
+  assert.equal(reloaded.progressPercent, 50);
+});
 test('Node ArticleStore updates progress', async (t) => {
   const h = await nodeArticleHarness(t);
   const article = await h.store.create(sample);
@@ -411,4 +482,282 @@ test('looking up a stale Article id never changes FlashStore data', async (t) =>
   const before = fs.readFileSync(h.cardFile, 'utf8');
   await assert.rejects(h.store.get('missing'));
   assert.equal(fs.readFileSync(h.cardFile, 'utf8'), before);
+});
+
+/* ---------- Reading: per-paragraph narration + translation ---------- */
+
+// Evaluate the real Reading paragraph renderer with a tiny DOM stand-in so the
+// tests exercise the shipped markup instead of a hand-copied fixture.
+function readingRenderHarness({ article, revealed = [], narration = {} } = {}) {
+  const renderSource = appSource.slice(appSource.indexOf('function articleParagraphToolbarHtml'), appSource.indexOf('function renderArticleView'));
+  const sentenceSource = appSource.slice(appSource.indexOf('function articleSentenceHtml'), appSource.indexOf('function articleParagraphToolbarHtml'));
+  const captured = { html: '' };
+  const sandbox = {
+    FlashArticleUtils: Utils,
+    esc: (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+    state: {
+      cards: [{ id: 'w', deck: 'Words', front: 'expect', back: '期待', due: 1, streak: 1, created: 1 }],
+      article: {
+        current: article, mode: 'reader', parsed: null, unknownWords: new Set(),
+        revealedParagraphs: new Set(revealed), narrationParagraphIndex: narration.paragraphIndex ?? null, narrationRate: narration.rate ?? null,
+        cache: new Map(),
+      },
+    },
+    articleMetrics: () => ({
+      analysis: Utils.analyzeArticle(article.content),
+      lookup: Utils.buildWordLookup(sandbox.state.cards),
+      coverage: Utils.articleCoverage(article.content, Utils.buildWordLookup(sandbox.state.cards)),
+      recognition: Utils.recognitionRate(article.content, sandbox.state.article.unknownWords),
+    }),
+    articlePercent: (v) => (Number.isInteger(v) ? String(v) : Number(v).toFixed(1)),
+    articleDate: () => '',
+    startArticleProgressTracking: () => {},
+    renderArticleHome: () => { captured.html = '<home>'; },
+    requestAnimationFrame: () => {},
+    document: { querySelector: () => null },
+  };
+  sandbox.$ = () => ({ set innerHTML(value) { captured.html = value; } });
+  vm.runInNewContext(`${sentenceSource}\n${renderSource}\nrenderArticleReader();`, sandbox);
+  return captured.html;
+}
+
+const readingSample = {
+  id: 'r1', title: 'A Slow Morning', source: '', content: 'One. Two.\n\nThree.\n\nFour.',
+  paragraphTranslations: ['第一段。', '第二段。', '第三段。'],
+};
+
+test('Reading renders one paragraph toolbar per English paragraph', () => {
+  const html = readingRenderHarness({ article: readingSample });
+  assert.equal((html.match(/class="article-paragraph-row"/g) || []).length, 3);
+  assert.equal((html.match(/data-article-narrate-paragraph=/g) || []).length, 6); // normal + slow per paragraph
+});
+
+test('Reading shows a translation button only for paragraphs that stored one', () => {
+  const html = readingRenderHarness({ article: readingSample });
+  assert.equal((html.match(/data-article-paragraph-translation=/g) || []).length, 3);
+  const legacy = readingRenderHarness({ article: { ...readingSample, paragraphTranslations: undefined } });
+  assert.doesNotMatch(legacy, /data-article-paragraph-translation/);
+  assert.doesNotMatch(legacy, /查看本段翻译/);
+});
+
+test('Reading keeps every translation collapsed until the learner asks', () => {
+  const html = readingRenderHarness({ article: readingSample });
+  assert.doesNotMatch(html, /data-article-paragraph-translation-body/);
+  assert.equal((html.match(/查看本段翻译/g) || []).length, 3);
+});
+
+test('Reading expands exactly the requested paragraph', () => {
+  const html = readingRenderHarness({ article: readingSample, revealed: [1] });
+  const bodies = html.match(/data-article-paragraph-translation-body="\d"/g) || [];
+  assert.deepEqual(bodies, ['data-article-paragraph-translation-body="1"']);
+  assert.match(html, /第二段。/);
+  assert.doesNotMatch(html, /第一段。/);
+  assert.match(html, /收起本段翻译/);
+});
+
+test('Reading can expand several paragraphs at once', () => {
+  const html = readingRenderHarness({ article: readingSample, revealed: [0, 2] });
+  const bodies = html.match(/data-article-paragraph-translation-body="\d"/g) || [];
+  assert.equal(bodies.length, 2);
+  assert.match(html, /第一段。/);
+  assert.match(html, /第三段。/);
+});
+
+test('Reading translation markup is a stable hook for tests and never a modal', () => {
+  const html = readingRenderHarness({ article: readingSample, revealed: [0] });
+  assert.match(html, /class="article-paragraph-translation" lang="zh-CN"/);
+  assert.doesNotMatch(html, /<dialog|showModal/);
+});
+
+test('Reading uses the shared Article paragraph splitter', () => {
+  const renderSource = appSource.slice(appSource.indexOf('function articleParagraphRowHtml'), appSource.indexOf('function renderArticleView'));
+  assert.match(renderSource, /metrics\.analysis\.paragraphs/);
+  assert.doesNotMatch(renderSource, /\.split\(\/\\n/); // no second paragraph regex in app.js
+  assert.match(appSource, /function articleParagraphRowHtml\(paragraph, paragraphIndex, lookup, translations\)/);
+});
+
+test('Reading paragraph count matches the saved Article paragraph count', () => {
+  const content = 'One.\n\nTwo.\n\nThree.\n\nFour.';
+  const html = readingRenderHarness({ article: { ...readingSample, content, paragraphTranslations: ['一。', '二。', '三。', '四。'] } });
+  assert.equal((html.match(/class="article-paragraph-row"/g) || []).length, Utils.splitParagraphs(content).length);
+});
+
+test('Reading paragraph narration plays only the selected paragraph sentences at normal rate', async () => {
+  const calls = [];
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  const sandbox = {
+    FlashArticleUtils: Utils,
+    state: { article: { current: { content: 'Alpha one. Alpha two.\n\nBeta one.' }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
+    playEnglish: async (text, options) => { calls.push({ text, rate: options.rate }); return 'system'; },
+    aiNarrationPause: async () => true,
+    stopArticleParagraphNarration: () => {},
+    refreshArticleParagraphNarrationUi: () => {},
+    stopEnglishPlayback: () => {},
+  };
+  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(1, 0);`, sandbox);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls.map((c) => c.text), ['Alpha one.', 'Alpha two.']);
+  assert.deepEqual(calls.map((c) => c.rate), [1, 1]);
+});
+
+test('Reading slow narration passes the paragraph and the slow rate', async () => {
+  const calls = [];
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  const sandbox = {
+    FlashArticleUtils: Utils,
+    state: { article: { current: { content: 'Alpha one. Alpha two.\n\nBeta one.' }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
+    playEnglish: async (text, options) => { calls.push({ text, rate: options.rate }); return 'system'; },
+    aiNarrationPause: async () => true,
+    stopArticleParagraphNarration: () => {},
+    refreshArticleParagraphNarrationUi: () => {},
+    stopEnglishPlayback: () => {},
+  };
+  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(0.75, 1);`, sandbox);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls.map((c) => c.text), ['Beta one.']);
+  assert.deepEqual(calls.map((c) => c.rate), [0.75]);
+});
+
+test('Reading narration never sends the Chinese translation into TTS', async () => {
+  const calls = [];
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  const sandbox = {
+    FlashArticleUtils: Utils,
+    state: { article: { current: { content: 'Only English here.', paragraphTranslations: ['只有中文翻译。'] }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
+    playEnglish: async (text) => { calls.push(text); return 'system'; },
+    aiNarrationPause: async () => true,
+    stopArticleParagraphNarration: () => {},
+    refreshArticleParagraphNarrationUi: () => {},
+    stopEnglishPlayback: () => {},
+  };
+  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(1, 0);`, sandbox);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, ['Only English here.']);
+  assert.equal(calls.some((t) => /[\u4e00-\u9fff]/.test(t)), false);
+});
+
+test('Reading paragraph narration prefers the existing playEnglish pipeline', () => {
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  assert.match(startSource, /playEnglish\(sentences\[sentenceIndex\], \{ rate: state\.article\.narrationRate, waitForEnd: true \}\)/);
+  assert.doesNotMatch(startSource, /speechSynthesis|new Audio\(|AudioContext|fetchTtsAudio/);
+});
+
+test('Reading toolbar buttons are handled before word and sentence lookups', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')"));
+  assert.ok(handler.indexOf('data-article-narrate-paragraph') < handler.indexOf("closest('[data-article-word]')"));
+  assert.match(handler, /e\.stopPropagation\(\)[\s\S]*?closest\('\[data-article-word\]'\)/);
+});
+
+test('Reading translation toggle flips a single paragraph and rerenders in place', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')"));
+  assert.match(handler, /state\.article\.revealedParagraphs\.delete\(index\)/);
+  assert.match(handler, /state\.article\.revealedParagraphs\.add\(index\)/);
+  assert.match(handler, /renderArticleReader\(\)/);
+  // Toggling must not touch any Article write path.
+  assert.doesNotMatch(handler, /ArticleStore\.(create|updateProgress|setUnknownWord)/);
+});
+
+test('switching to a different Article clears the previous expansion state', () => {
+  const openSource = appSource.slice(appSource.indexOf('async function openArticle'), appSource.indexOf('function stopArticleProgressTracking'));
+  assert.match(openSource, /state\.article\.revealedParagraphs = new Set\(\)/);
+});
+
+test('leaving the reader clears expansion state without persisting it', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')"));
+  const listBranch = handler.slice(handler.indexOf('data-article-list'), handler.indexOf('data.articleOpen'));
+  assert.match(listBranch, /data-article-list/);
+  assert.match(listBranch, /state\.article\.revealedParagraphs = new Set\(\)/);
+  assert.doesNotMatch(appSource, /revealedParagraphs[^\n]*ArticleStore/);
+});
+
+test('Reading paragraph toolbar renders clickable Word tokens inside the English only', () => {
+  const html = readingRenderHarness({ article: readingSample, revealed: [0] });
+  assert.match(html, /data-article-word="One"/);
+  const translationSection = html.slice(html.indexOf('article-paragraph-translation'), html.indexOf('article-paragraph-translation', html.indexOf('article-paragraph-translation') + 1));
+  assert.doesNotMatch(translationSection, /data-article-word/);
+});
+
+/* ---------- Reading: statistics stay English-only ---------- */
+
+test('Chinese translations never enter the Reading word count', () => {
+  const content = 'One two three.';
+  const withZh = `${content}\n\n一 二 三 四 五 六 七 八 九 十。`;
+  const analysis = Utils.analyzeArticle(content);
+  const polluted = Utils.analyzeArticle(withZh);
+  assert.equal(analysis.wordCount, 3);
+  assert.ok(polluted.wordCount > analysis.wordCount || polluted.paragraphs.length > analysis.paragraphs.length);
+  // The Reading renderer only ever counts word tokens of the English content.
+  const renderSource = appSource.slice(appSource.indexOf('function renderArticleReader'), appSource.indexOf('function renderArticleView'));
+  assert.match(renderSource, /metrics\.analysis\.wordCount/);
+  assert.doesNotMatch(renderSource, /wordCount[\s\S]{0,40}paragraphTranslations/);
+});
+
+test('Chinese translations do not change recognition rate', () => {
+  const content = 'expect unknownword.';
+  const base = Utils.recognitionRate(content, ['unknownword']);
+  const withZh = Utils.recognitionRate(content, ['unknownword']);
+  assert.deepEqual(base, withZh);
+  assert.equal(base.total, 2);
+});
+
+test('Chinese translations do not change unknownWords', () => {
+  const content = 'Alpha beta.';
+  const before = Utils.normalizeUnknownWords(['beta']);
+  const after = Utils.normalizeUnknownWords(['beta']);
+  assert.deepEqual(before, after);
+  assert.deepEqual(before, ['beta']);
+});
+
+test('FlashDesk coverage ignores the Chinese translation field', () => {
+  const content = 'expect more';
+  const cards = [{ deck: 'Words', front: 'expect' }];
+  assert.equal(Utils.articleCoverage(content, cards).percent, 50);
+  assert.equal(Utils.articleCoverage(content, cards).matched, 1);
+});
+
+/* ---------- Reading: layout contract at 375px ---------- */
+
+test('Reading paragraph actions are a wrapping flex row that cannot become vertical slivers', () => {
+  const css = source('public/styles.css');
+  const block = css.slice(css.indexOf('.article-paragraph-actions'), css.indexOf('.article-paragraph-translation {'));
+  assert.match(block, /display: flex/);
+  assert.match(block, /flex-wrap: wrap/);
+  assert.match(block, /min-height: 3[26]px/);
+  // The narrow viewport is where slivers would appear: keep them from shrinking
+  // and forbid mid-label wrapping.
+  const narrow = css.slice(css.indexOf('@media (max-width: 560px)', css.indexOf('.article-paragraph-actions')));
+  assert.match(narrow, /\.article-paragraph-narrate, \.article-paragraph-translate \{ flex: 1 1 auto; min-width: 0/);
+  assert.match(narrow, /white-space: nowrap/);
+});
+
+test('Reading translations are visually lighter than the English body', () => {
+  const css = source('public/styles.css');
+  const block = css.slice(css.indexOf('.article-paragraph-translation {'), css.indexOf('.article-paragraph-translation .micro-label'));
+  assert.match(block, /color: var\(--muted\)/);
+  assert.match(block, /font-size: \.95rem/);
+});
+
+/* ---------- Reading: backward compatibility + no formal data writes ---------- */
+
+test('a legacy Article without translations still renders English, words and progress', () => {
+  const legacy = { id: 'legacy', title: 'Old', content: 'Mr. Smith trains models.\n\nDo they work? Yes!' };
+  const html = readingRenderHarness({ article: legacy });
+  assert.match(html, /data-article-word="Mr"/);
+  assert.match(html, /class="article-sentence"/);
+  assert.match(html, /article-progress-bar/);
+  assert.match(html, /article-recognition-rate/);
+  assert.doesNotMatch(html, /查看本段翻译/);
+});
+
+test('Reading never writes to the formal learning data', () => {
+  const renderSource = appSource.slice(appSource.indexOf('function articleParagraphToolbarHtml'), appSource.indexOf('function renderArticleView'));
+  assert.doesNotMatch(renderSource, /FlashStore|flashdesk-data/);
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  assert.doesNotMatch(startSource, /FlashStore|flashdesk-data/);
+});
+
+test('the AI Today Article and Reading share the same paragraph splitter contract', () => {
+  const content = 'One.\n\nTwo.\n\nThree.';
+  assert.equal(Utils.splitParagraphs(content).length, Utils.analyzeArticle(content).paragraphs.length);
+  assert.equal(Utils.splitParagraphs(content).length, Utils.normalizeParagraphTranslations(['一', '二', '三'], 3).length);
 });
