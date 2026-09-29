@@ -78,7 +78,7 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       headers.set('Cache-Control', 'no-store');
       return new Response(result.audio, { status: 200, headers });
     } catch {
-      return failure('PRONUNCIATION_FAILED', 'AI 发音失败', 502, origin, env);
+      return failure('PRONUNCIATION_PROVIDER_ERROR', 'AI 发音暂时不可用', 502, origin, env);
     }
   }
   if (url.pathname !== '/ai' || request.method !== 'POST') return failure('INVALID_REQUEST', '请求无效', 400, origin, env);

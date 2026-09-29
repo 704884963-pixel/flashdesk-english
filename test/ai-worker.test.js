@@ -311,6 +311,66 @@ test('pronunciation endpoint reports unavailable without inventing a provider', 
   assert.equal(modelCalled, false);
 });
 
+test('MeloTTS pronunciation adapter maps en-US to the fixed Cloudflare model and English language', async () => {
+  const { createPronunciationProvider, MELOTTS_MODEL } = await load('pronunciation.js');
+  let call;
+  const provider = createPronunciationProvider({
+    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([4, 5, 6]); } },
+  });
+  const result = await provider.synthesize({ text: 'students', locale: 'en-US' });
+  assert.equal(MELOTTS_MODEL, '@cf/myshell-ai/melotts');
+  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'students', lang: 'en' } });
+  assert.equal(result.contentType, 'audio/mpeg');
+  assert.deepEqual(Array.from(result.audio), [4, 5, 6]);
+});
+
+test('pronunciation adapter ignores client model and language overrides', async () => {
+  const { createPronunciationProvider } = await load('pronunciation.js');
+  let call;
+  const provider = createPronunciationProvider({
+    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([1]); } },
+  });
+  await provider.synthesize({ text: 'word', locale: 'en-US', model: 'client-model', lang: 'fr' });
+  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'word', lang: 'en' } });
+});
+
+test('pronunciation route calls the bound MeloTTS provider and returns MP3 bytes', async () => {
+  const { handleRequest } = await load('index.js');
+  let call;
+  const configured = {
+    ...env,
+    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([7, 8, 9]); } },
+  };
+  const response = await handleRequest(pronunciationRequest({ text: ' improves ', locale: 'en-US', model: 'evil', lang: 'fr' }), configured, upstream('{}'));
+  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'improves', lang: 'en' } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), [7, 8, 9]);
+});
+
+test('MeloTTS failures return a safe provider error without leaking internals', async () => {
+  const { handleRequest } = await load('index.js');
+  const configured = {
+    ...env,
+    AI: { async run() { throw new Error('account 123 secret internal failure'); } },
+  };
+  const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
+  const body = await response.json();
+  assert.equal(response.status, 502);
+  assert.deepEqual(body, { ok: false, error: { code: 'PRONUNCIATION_PROVIDER_ERROR', message: 'AI 发音暂时不可用' } });
+  assert.doesNotMatch(JSON.stringify(body), /account|secret|internal/i);
+});
+
+test('invalid MeloTTS output returns the same safe provider error', async () => {
+  const { handleRequest } = await load('index.js');
+  const configured = { ...env, AI: { async run() { return { error: 'not audio' }; } } };
+  const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
+  const body = await response.json();
+  assert.equal(response.status, 502);
+  assert.equal(body.error.code, 'PRONUNCIATION_PROVIDER_ERROR');
+});
+
 test('pronunciation endpoint exposes a provider-neutral audio contract without caching', async () => {
   const { handleRequest } = await load('index.js');
   let received;

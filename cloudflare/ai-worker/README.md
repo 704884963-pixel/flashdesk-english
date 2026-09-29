@@ -3,7 +3,7 @@
 This Worker is separate from the TTS Worker and keeps provider credentials off the client.
 
 1. Log in to Cloudflare with Wrangler.
-2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_PROVIDER` and `AI_MODEL`. Optionally set `AI_LOOKUP_MODEL` for word lookup and `AI_TRANSLATION_MODEL` for Article translation.
+2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_PROVIDER` and `AI_MODEL`. Optionally set `AI_LOOKUP_MODEL` for word lookup and `AI_TRANSLATION_MODEL` for Article translation. Keep the `[ai]` binding so pronunciation can call Workers AI through `env.AI`.
 3. Add `ZHIPU_API_KEY` with `wrangler secret put ZHIPU_API_KEY`.
 4. Add the app access token with `wrangler secret put FLASHDESK_AI_TOKEN`.
 5. Deploy with Wrangler.
@@ -24,4 +24,4 @@ The Worker also reserves a provider-neutral `POST /pronounce` interface:
 }
 ```
 
-It uses the same Bearer app token and origin checks as `/ai`. A future pronunciation adapter must return audio through the internal `synthesize({ text, locale })` contract. No pronunciation provider is configured yet, so the production endpoint deliberately returns `503 PRONUNCIATION_UNAVAILABLE` instead of generating placeholder audio.
+It uses the same Bearer app token and origin checks as `/ai`. The provider-neutral `synthesize({ text, locale })` adapter maps `en-US` to Cloudflare Workers AI MeloTTS (`@cf/myshell-ai/melotts`) with `lang: "en"`, then returns the generated MP3 directly as `audio/mpeg`. If the Workers AI binding is unavailable, the endpoint returns `503 PRONUNCIATION_UNAVAILABLE`; provider failures return a safe `502 PRONUNCIATION_PROVIDER_ERROR` response.
