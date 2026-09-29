@@ -34,14 +34,7 @@ function reviewClient(cards) {
         gradeCalls.push({ id, kind });
         const card = state.cards.find((item) => item.id === id);
         if (!card) throw new Error('card not found');
-        if (kind === 'again') {
-          card.due = Date.now() + 10 * 60 * 1000;
-          card.streak = 0;
-          card.lapses += 1;
-        } else {
-          card.streak += 1;
-          card.due = Date.now() + 24 * 60 * 60 * 1000;
-        }
+        FlashLogic.gradeReviewCard(card, kind);
         return { card: JSON.parse(JSON.stringify(card)) };
       },
       async logSession(summary) { sessionLogs.push(summary); return { ok: true, logged: true }; },
@@ -125,11 +118,34 @@ test('Review completion summary matches the two explicit ratings', async () => {
     reviewed: 2, correct: 1, again: 1, complete: true,
   }));
   assert.equal(client.run('sessionLogs.length'), 1);
-  assert.match(client.nodes.get('#review-area').innerHTML, /已复习 2 张卡片 · 记住了 1 张 · 再来一次 1 张 · 正确率 50%/);
+  assert.match(client.nodes.get('#review-area').innerHTML, /已复习 2 张卡片 · 记住了 1 张 · 很熟 0 张 · 再来一次 1 张 · 正确率 50%/);
 });
 
 test('Review grade contains exactly one current-card gradeCard call', () => {
   const section = appSource.slice(appSource.indexOf('async function grade(kind)'), appSource.indexOf('async function completeSession'));
   assert.equal((section.match(/FlashStore\.gradeCard\(/g) || []).length, 1);
   assert.doesNotMatch(section, /twin|关联卡片/);
+});
+
+test('easy grades only the current entity once and records a distinct history count', async () => {
+  const client = reviewClient([card('a', 'one', '一'), card('b', '一', 'one')]);
+  await gradeFirst(client, 'easy');
+  assert.equal(client.run('JSON.stringify(gradeCalls)'), JSON.stringify([{ id: 'a', kind: 'easy' }]));
+  assert.equal(client.run("state.cards.find((item) => item.id === 'a').streak"), 1);
+  assert.equal(client.run("state.cards.find((item) => item.id === 'a').reviewStep"), 3);
+  assert.equal(client.run("state.cards.find((item) => item.id === 'b').streak"), 0);
+  assert.equal(client.run('state.session.correct'), 1);
+  assert.equal(client.run('state.session.easy'), 1);
+  await gradeFirst(client, 'got');
+  assert.equal(client.run('sessionLogs[0].easy'), 1);
+  assert.equal(client.run('sessionLogs[0].remember'), 1);
+});
+
+test('Review renders three horizontal grade buttons including the secondary easy action', () => {
+  const render = appSource.slice(appSource.indexOf('function renderReview()'), appSource.indexOf('function setFlipped'));
+  const styles = fs.readFileSync(path.join(__dirname, '../public/styles.css'), 'utf8');
+  assert.match(render, /id="grade-easy"[^>]*>很熟<\/button>/);
+  assert.match(styles, /grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.btn-grade[^}]*white-space:\s*nowrap/s);
+  assert.match(styles, /\.btn-easy\s*{[^}]*background:\s*var\(--accent-dim\)[^}]*border-color:\s*var\(--accent\)/s);
 });

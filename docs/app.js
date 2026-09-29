@@ -46,6 +46,7 @@ function freshSession() {
     reviewed: 0,
     correct: 0,
     again: 0,
+    easy: 0,
     gradedIds: new Set(),
     picks: {}, // mixed-direction memo: 'idA|idB' -> shown card id, stable per session
     complete: false,
@@ -809,20 +810,26 @@ function fmtRelative(due) {
   return `${Math.round(d / 30)} 个月后`;
 }
 
-const WORD_LIBRARY_FILTERS = ['all', 'due', 'new', 'lapsed', 'mastered'];
+const WORD_LIBRARY_FILTERS = ['all', 'due', 'new', 'lapsed', 'forgotten', 'mastered'];
 const WORD_LIBRARY_LABELS = {
   all: '全部',
   due: '待复习',
   new: '新词',
   lapsed: '易错',
+  forgotten: '曾经忘记',
   mastered: '已掌握',
 };
+
+function hasHistoricalLapse(card) {
+  return Number(card?.lapses || 0) > 0;
+}
 
 function wordLibraryMatches(card, filter, now = Date.now()) {
   if (card.deck !== 'Words') return false;
   if (filter === 'due') return Number(card.due) <= now;
   if (filter === 'new') return Number(card.streak || 0) === 0 && Number(card.lapses || 0) === 0;
   if (filter === 'lapsed') return FlashLogic.isWeakCard(card);
+  if (filter === 'forgotten') return hasHistoricalLapse(card);
   if (filter === 'mastered') return Number(card.streak || 0) >= 3;
   return true;
 }
@@ -902,11 +909,15 @@ function toast(msg) {
 function renderDeckControls() {
   const names = decks();
   if (state.deckFilter !== 'All' && !names.includes(state.deckFilter)) state.deckFilter = 'All';
-  const sel = $('#deck-filter');
-  sel.innerHTML = ['All', ...names]
+  const options = ['All', ...names]
     .map((n) => `<option value="${esc(n)}">${esc(n === 'All' ? '全部' : deckDisplayName(n))}</option>`)
     .join('');
-  sel.value = state.deckFilter;
+  ['#deck-filter', '#browse-deck-filter'].forEach((selector) => {
+    const sel = $(selector);
+    if (!sel) return;
+    sel.innerHTML = options;
+    sel.value = state.deckFilter;
+  });
 }
 
 /* ---------- review session ---------- */
@@ -942,7 +953,7 @@ function renderReview() {
     area.innerHTML = `
       <div class="panel complete-panel">
         <div class="micro-label">本轮完成 · ${esc(deckLabel())}</div>
-        <p class="complete-stats">已复习 ${s.reviewed} 张卡片 · 记住了 ${s.correct} 张 · 再来一次 ${s.again} 张 · 正确率 ${pct}%</p>
+        <p class="complete-stats">已复习 ${s.reviewed} 张卡片 · 记住了 ${s.correct - s.easy} 张 · 很熟 ${s.easy} 张 · 再来一次 ${s.again} 张 · 正确率 ${pct}%</p>
         <div class="micro-label lognote${s.logged === false ? ' warn' : ''}">${logNote}</div>
         <div class="complete-actions">
           <button class="btn btn-primary" id="copy-stats-complete">复制学习统计</button>
@@ -1002,6 +1013,7 @@ function renderReview() {
       <div class="grade-row" ${s.revealed ? '' : 'hidden'}>
         <button class="btn-grade btn-again" id="grade-again" title="10 分钟后再复习（按键：1）">再来一次</button>
         <button class="btn-grade btn-got" id="grade-got" title="延长下次复习间隔（按键：2）">记住了</button>
+        <button class="btn-grade btn-easy" id="grade-easy" title="跳过前期密集复习（按键：3）">很熟</button>
       </div>
     </div>`;
 }
@@ -1052,8 +1064,11 @@ async function grade(kind) {
   s.grading = false;
   s.active = true;
   s.reviewed += 1;
-  if (kind === 'got') s.correct += 1;
-  else s.again += 1;
+  if (kind === 'again') s.again += 1;
+  else {
+    s.correct += 1;
+    if (kind === 'easy') s.easy += 1;
+  }
   s.gradedIds.add(id);
   const idx = state.cards.findIndex((c) => c.id === id);
   if (idx !== -1) state.cards[idx] = card;
@@ -1080,10 +1095,13 @@ async function completeSession() {
       reviewed: s.reviewed,
       correct: s.correct,
       again: s.again,
+      remember: s.correct - s.easy,
+      easy: s.easy,
       hardest,
     });
     s.logged = res.logged;
-    state.history.push({ date: localDate(), deck: state.deckFilter, reviewed: s.reviewed, correct: s.correct });
+    state.history.push({ date: localDate(), deck: state.deckFilter, reviewed: s.reviewed, correct: s.correct,
+      remember: s.correct - s.easy, easy: s.easy, again: s.again });
   } catch (err) {
     s.logged = false;
   }
@@ -1443,6 +1461,7 @@ function wordListItemHtml(card, now = Date.now()) {
   const details = wordDetails(card);
   const number = details.wordNumber === null ? '#未编号' : `#${details.wordNumber}`;
   const status = wordLearningStatus(card, now);
+  const lapses = Number(card.lapses || 0);
   return `<article class="word-list-item" data-word-card="${esc(card.id)}">
     <button type="button" class="word-list-main" data-word-open="${esc(card.id)}">
       <span class="word-list-heading"><span class="word-number">${number}</span><strong>${esc(card.front)}</strong></span>
@@ -1450,6 +1469,7 @@ function wordListItemHtml(card, now = Date.now()) {
       <span class="word-list-meta">
         <span class="word-list-meta-main">${details.forms.length ? `<span class="word-list-forms">${esc(details.forms.join(' · '))}</span><span aria-hidden="true"> · </span>` : ''}<span class="word-status word-status-${status.key}">● ${status.label}</span></span>
         <span class="word-list-due">· ${formatWordDue(card.due, now)}</span>
+        ${hasHistoricalLapse(card) ? `<span class="word-list-forgotten">· 曾忘 ${lapses} 次</span>` : ''}
       </span>
     </button>
     ${wordSpeechButtons(card)}
@@ -2673,6 +2693,27 @@ function prefillArticleCard(deck, front, back = '', wordDraft = {}) {
 
 /* ---------- views ---------- */
 
+const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse']);
+
+function setMoreMenuOpen(open) {
+  const toggle = $('#nav-more-toggle');
+  const menu = $('#nav-more-menu');
+  if (!toggle || !menu) return;
+  menu.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+
+function updateNavigationState(name) {
+  document.querySelectorAll('.tab[data-view]').forEach((button) => {
+    const active = button.dataset.view === name;
+    button.classList.toggle('btn-active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  const more = $('#nav-more-toggle');
+  if (more) more.classList.toggle('btn-active', MORE_VIEWS.has(name));
+}
+
 function switchView(name) {
   if (state.ai.narrationRate !== null && name !== 'ai') stopAiArticleNarration(false);
   if (state.article.narrationRate !== null && name !== 'reading') stopArticleParagraphNarration(false);
@@ -2682,8 +2723,9 @@ function switchView(name) {
     flushArticleProgress();
   }
   state.view = name;
+  setMoreMenuOpen(false);
   document.body.classList.toggle('reading-view', name === 'reading');
-  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('btn-active', b.dataset.view === name));
+  updateNavigationState(name);
   for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse']) $(`#view-${v}`).hidden = v !== name;
   if (name === 'review') {
     state.session = freshSession();
@@ -2718,9 +2760,27 @@ function bindEvents() {
       switchView(b.dataset.view);
     }));
 
-  $('#deck-filter').addEventListener('change', (e) => {
-    state.deckFilter = e.target.value;
-    switchView(state.view); // resets any in-progress session against the new filter
+  $('#nav-more-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    setMoreMenuOpen($('#nav-more-toggle').getAttribute('aria-expanded') !== 'true');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.nav-more')) setMoreMenuOpen(false);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    setMoreMenuOpen(false);
+    $('#nav-more-toggle').focus();
+  });
+
+  ['#deck-filter', '#browse-deck-filter'].forEach((selector) => {
+    $(selector).addEventListener('change', (e) => {
+      state.deckFilter = e.target.value;
+      renderDeckControls();
+      switchView(state.view); // resets any in-progress session against the new filter
+    });
   });
 
   $('#speech-voice').addEventListener('change', (e) => {
@@ -2786,6 +2846,7 @@ function bindEvents() {
     else if (b.id === 'card-next') stepCard(1);
     else if (b.id === 'grade-again') grade('again');
     else if (b.id === 'grade-got') grade('got');
+    else if (b.id === 'grade-easy') grade('easy');
     else if (b.id === 'copy-stats-complete') copyStats(b, $('#stats-fallback-complete'));
     else if (b.id === 'review-again') {
       state.session = freshSession();
@@ -2808,6 +2869,7 @@ function bindEvents() {
     } else if (state.session.revealed) {
       if (e.key === '1') grade('again');
       else if (e.key === '2') grade('got');
+      else if (e.key === '3') grade('easy');
       else if (e.key === 'Enter' && !e.target.matches('button')) grade('got');
     }
   });

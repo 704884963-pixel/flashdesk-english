@@ -253,6 +253,7 @@ async function nodeArticleHarness(t) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './public/logic.js') return require('../public/logic.js');
       if (name === './public/article-utils.js') return Utils;
       if (name === 'node:fs') return { ...fs, renameSync(from, to) {
         if (failArticleWrite && String(to).endsWith('flashdesk-articles.json')) throw new Error('article write failed');

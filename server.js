@@ -7,16 +7,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const seed = require('./seed.js');
+const FlashLogic = require('./public/logic.js');
 
 const PORT = 5902;
 const DATA_FILE = path.join(__dirname, 'flashdesk-data.json');
 const ARTICLE_FILE = path.join(__dirname, 'flashdesk-articles.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const LOG_FILE = path.join(os.homedir(), 'drills', 'log.txt');
-
-const TEN_MINUTES = 10 * 60 * 1000;
-const DAY = 24 * 60 * 60 * 1000;
-const LADDER = [1, 3, 7, 14, 30, 60]; // days by streak; streak ≥ 6 stays at 60
 
 let data;
 
@@ -212,10 +209,10 @@ function logStamp() {
   return `${localDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function sessionLogLine({ deck, reviewed, correct, again, hardest }) {
+function sessionLogLine({ deck, reviewed, correct, remember, easy, again, hardest }) {
   const pct = Math.round((correct / reviewed) * 100);
   const hard = hardest.length ? hardest.join(', ') : 'none';
-  return `[${logStamp()}] FlashDesk — deck: ${deck}, reviewed: ${reviewed}, got-it: ${correct}, again: ${again}, accuracy: ${pct}%, hardest cards: ${hard}`;
+  return `[${logStamp()}] FlashDesk — deck: ${deck}, reviewed: ${reviewed}, remember: ${remember}, easy: ${easy}, again: ${again}, accuracy: ${pct}%, hardest cards: ${hard}`;
 }
 
 function quizLogLine({ deck, questions, correct, missedFronts }) {
@@ -385,16 +382,8 @@ async function handleApi(req, res, pathname) {
     const body = await readBody(req);
     const card = data.cards.find((c) => c.id === body.id);
     if (!card) return sendJSON(res, 404, { error: 'card not found' });
-    if (body.grade === 'again') {
-      card.due = Date.now() + TEN_MINUTES;
-      card.streak = 0;
-      card.lapses += 1;
-    } else if (body.grade === 'got') {
-      card.streak += 1;
-      card.due = Date.now() + LADDER[Math.min(card.streak, LADDER.length) - 1] * DAY;
-    } else {
-      return sendJSON(res, 400, { error: 'grade must be "again" or "got"' });
-    }
+    try { FlashLogic.gradeReviewCard(card, body.grade); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
     saveData();
     return sendJSON(res, 200, { card });
   }
@@ -442,13 +431,15 @@ async function handleApi(req, res, pathname) {
     const reviewed = Number(body.reviewed);
     const correct = Number(body.correct) || 0;
     const again = Number(body.again) || 0;
+    const easy = Number(body.easy) || 0;
+    const remember = Number(body.remember) || Math.max(0, correct - easy);
     const deck = String(body.deck || 'All');
     const hardest = Array.isArray(body.hardest) ? body.hardest.slice(0, 2).map(String) : [];
     if (!Number.isFinite(reviewed) || reviewed < 1) return sendJSON(res, 400, { error: 'reviewed must be >= 1' });
-    data.history.push({ date: localDate(), deck, reviewed, correct });
+    data.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
     saveData();
     try {
-      appendLog(sessionLogLine({ deck, reviewed, correct, again, hardest }));
+      appendLog(sessionLogLine({ deck, reviewed, correct, remember, easy, again, hardest }));
       return sendJSON(res, 200, { ok: true, logged: true });
     } catch (err) {
       return sendJSON(res, 200, { ok: true, logged: false, logError: err.message });

@@ -34,6 +34,7 @@ const injectedFields = {
   id: 'replacement', deck: 'Sentences', wordNumber: 999, due: 0, streak: 0, lapses: 0, created: 0,
 };
 const expected = { ...original, front: 'updated approach', back: '更新后的备注' };
+const FlashLogic = require('../public/logic.js');
 
 async function nodeHarness(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flashdesk-update-test-'));
@@ -53,6 +54,7 @@ async function nodeHarness(t) {
     console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return require('../seed.js');
+      if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:http') {
         return {
           createServer(handler) {
@@ -85,7 +87,7 @@ async function nodeHarness(t) {
 function pwaHarness() {
   let stored = JSON.stringify(fixture());
   let fail = false;
-  const window = {};
+  const window = { FlashLogic };
   vm.runInNewContext(source('pwa/store-local.js'), {
     window, navigator: {},
     localStorage: {

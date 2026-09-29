@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard } = require('../public/logic.js');
+const { reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard,
+  effectiveReviewStep, gradeReviewCard, REVIEW_INTERVAL_DAYS } = require('../public/logic.js');
 
 const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, deck });
 
@@ -12,6 +13,56 @@ test('current weak status requires historical lapses and a zero streak', () => {
   assert.equal(isWeakCard({ lapses: 1, streak: 1 }), false);
   assert.equal(isWeakCard({ lapses: 3, streak: 2 }), false);
   assert.equal(isWeakCard({ lapses: 0, streak: 0 }), false);
+});
+
+test('legacy streak maps to the old 1/3/7/14/30/60-day review steps', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 12].map((streak) => effectiveReviewStep({ streak })), [0, 0, 1, 2, 3, 4, 5, 5]);
+  assert.equal(effectiveReviewStep({ streak: 1, reviewStep: 7 }), 7);
+});
+
+test('ordinary remember advances streak and reviewStep through the long ladder', () => {
+  const day = 86400000;
+  const card = { streak: 0, lapses: 0, due: 0 };
+  gradeReviewCard(card, 'got', 1000);
+  assert.deepEqual({ streak: card.streak, step: card.reviewStep, due: card.due }, { streak: 1, step: 0, due: 1000 + day });
+  gradeReviewCard(card, 'got', 2000);
+  assert.deepEqual({ streak: card.streak, step: card.reviewStep, due: card.due }, { streak: 2, step: 1, due: 2000 + 3 * day });
+  gradeReviewCard(card, 'got', 3000);
+  assert.deepEqual({ streak: card.streak, step: card.reviewStep, due: card.due }, { streak: 3, step: 2, due: 3000 + 7 * day });
+  assert.equal(card.streak >= 3, true);
+});
+
+test('easy skips early steps, increments streak once and never increases lapses', () => {
+  const day = 86400000;
+  const cases = [
+    [{ streak: 0 }, 1, 3, 14],
+    [{ streak: 1 }, 2, 3, 14],
+    [{ streak: 2 }, 3, 3, 14],
+    [{ streak: 3 }, 4, 3, 14],
+    [{ streak: 4 }, 5, 4, 30],
+    [{ streak: 5 }, 6, 5, 60],
+    [{ streak: 6 }, 7, 6, 120],
+    [{ streak: 7, reviewStep: 6 }, 8, 7, 240],
+    [{ streak: 8, reviewStep: 7 }, 9, 8, 365],
+    [{ streak: 9, reviewStep: 8 }, 10, 8, 365],
+  ];
+  for (const [fields, streak, step, days] of cases) {
+    const card = { lapses: 2, ...fields };
+    gradeReviewCard(card, 'easy', 5000);
+    assert.deepEqual({ streak: card.streak, step: card.reviewStep, days: (card.due - 5000) / day, lapses: card.lapses },
+      { streak, step, days, lapses: 2 });
+  }
+  assert.deepEqual(REVIEW_INTERVAL_DAYS, [1, 3, 7, 14, 30, 60, 120, 240, 365]);
+});
+
+test('again resets scheduling but keeps weak/new/mastered definitions unchanged', () => {
+  const card = { streak: 4, lapses: 1, reviewStep: 5 };
+  gradeReviewCard(card, 'again', 9000);
+  assert.equal(card.streak, 0);
+  assert.equal(card.lapses, 2);
+  assert.equal(card.reviewStep, 0);
+  assert.equal(card.due, 9000 + 10 * 60 * 1000);
+  assert.equal(isWeakCard(card), true);
 });
 
 test('reviewQueue keeps both due reversed cards as independent entities', () => {

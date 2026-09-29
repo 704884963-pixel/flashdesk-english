@@ -14,24 +14,33 @@
         <h1>Flash<span class="accent">Desk</span></h1>
         <div class="micro-label">间隔复习</div>
       </div>
-      <nav class="nav">
-        <button class="btn tab" data-view="review">复习</button>
-        <button class="btn tab" data-view="quiz">检测</button>
-        <button class="btn tab" data-view="add">新增</button>
-        <button class="btn tab" data-view="words">单词库</button>
-        <button class="btn tab" data-view="reading">阅读</button>
-        <button class="btn tab" data-view="ai">AI学习</button>
-        <button class="btn tab" data-view="browse">浏览</button>
-        <label class="deck-filter">
-          <span class="micro-label">分类</span>
-          <select id="deck-filter"></select>
-        </label>
-      </nav>
     </header>
+    <div class="nav-sticky">
+      <nav class="nav" aria-label="主导航">
+        <button type="button" class="btn tab" data-view="review">复习</button>
+        <button type="button" class="btn tab" data-view="words">单词库</button>
+        <button type="button" class="btn tab" data-view="ai">AI学习</button>
+        <div class="nav-more">
+          <button type="button" class="btn nav-more-toggle" id="nav-more-toggle"
+            aria-label="更多功能" aria-haspopup="menu" aria-expanded="false">…</button>
+          <div class="nav-more-menu" id="nav-more-menu" role="menu" hidden>
+            <button type="button" class="tab nav-more-item nav-more-reading" data-view="reading" role="menuitem">阅读</button>
+            <div class="nav-more-separator" role="separator"></div>
+            <button type="button" class="tab nav-more-item" data-view="add" role="menuitem">新增</button>
+            <button type="button" class="tab nav-more-item" data-view="quiz" role="menuitem">检测</button>
+            <button type="button" class="tab nav-more-item" data-view="browse" role="menuitem">浏览</button>
+          </div>
+        </div>
+      </nav>
+    </div>
 
     <section id="view-review" hidden>
       <div class="review-top">
         <div class="micro-label" id="due-count"></div>
+        <label class="deck-filter review-deck-filter">
+          <span class="micro-label">分类</span>
+          <select id="deck-filter" aria-label="复习分类"></select>
+        </label>
         <div class="dir-switch" id="dir-switch" hidden>
           <button class="dir-opt" data-dir="keyword">关键词</button>
           <button class="dir-opt" data-dir="description">释义</button>
@@ -199,7 +208,13 @@ back: 智能体接收查询。</pre>
 
     <section id="view-browse" hidden>
       <div class="browse-toolbar">
-        <div class="micro-label" id="browse-count"></div>
+        <div class="browse-toolbar-main">
+          <div class="micro-label" id="browse-count"></div>
+          <label class="deck-filter browse-deck-filter">
+            <span class="micro-label">分类</span>
+            <select id="browse-deck-filter" aria-label="浏览分类"></select>
+          </label>
+        </div>
         <button class="btn" id="copy-stats-browse">复制学习统计</button>
       </div>
       <div class="panel table-panel">

@@ -3,6 +3,36 @@
 
 (() => {
   const norm = (s) => String(s).trim().toLowerCase();
+  const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 365];
+  const REVIEW_DAY_MS = 24 * 60 * 60 * 1000;
+
+  // Legacy cards used streak as both the correctness counter and interval
+  // index. Keep them readable without migrating the dataset; the first real
+  // grade naturally writes the independent reviewStep field.
+  function effectiveReviewStep(card) {
+    const stored = Number(card?.reviewStep);
+    if (Number.isInteger(stored) && stored >= 0 && stored < REVIEW_INTERVAL_DAYS.length) return stored;
+    const streak = Math.max(0, Math.floor(Number(card?.streak) || 0));
+    return Math.min(Math.max(streak - 1, 0), 5);
+  }
+
+  function gradeReviewCard(card, grade, now = Date.now()) {
+    const currentStep = effectiveReviewStep(card);
+    if (grade === 'again') {
+      card.due = now + 10 * 60 * 1000;
+      card.streak = 0;
+      card.lapses = Math.max(0, Number(card.lapses) || 0) + 1;
+      card.reviewStep = 0;
+      return card;
+    }
+    if (grade !== 'got' && grade !== 'easy') throw new Error('grade must be "again", "got" or "easy"');
+    const streak = Math.max(0, Math.floor(Number(card.streak) || 0));
+    card.streak = streak + 1;
+    if (grade === 'easy') card.reviewStep = currentStep < 3 ? 3 : Math.min(currentStep + 1, REVIEW_INTERVAL_DAYS.length - 1);
+    else card.reviewStep = streak === 0 ? 0 : Math.min(currentStep + 1, REVIEW_INTERVAL_DAYS.length - 1);
+    card.due = now + REVIEW_INTERVAL_DAYS[card.reviewStep] * REVIEW_DAY_MS;
+    return card;
+  }
   // Every due entity is an independent review item. Cards whose front/back are
   // reversed are still separate cards and must each be shown and graded.
   function reviewQueue(cards, now) {
@@ -267,6 +297,7 @@
   }
 
   const FlashLogic = {
+    REVIEW_INTERVAL_DAYS, effectiveReviewStep, gradeReviewCard,
     reviewQueue, similarity, rankDistractors, buildChoices,
     WORD_QUIZ_TYPES, isWeakCard, wordQuizPool, wordQuizWeight, selectWordQuizCards,
     buildWordQuizChoices, buildWordQuizQuestion, mixedWordQuizTypes,

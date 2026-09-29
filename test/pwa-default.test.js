@@ -8,12 +8,13 @@ const root = path.resolve(__dirname, '..');
 const source = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const defaults = JSON.parse(source('pwa/default-data.json'));
+const FlashLogic = require('../public/logic.js');
 
 function harness(initialRaw) {
   let stored = initialRaw;
   let writes = 0;
   let fetches = 0;
-  const window = {};
+  const window = { FlashLogic };
   vm.runInNewContext(source('pwa/store-local.js'), {
     window,
     navigator: {},

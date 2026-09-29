@@ -17,7 +17,7 @@ async function harness(t, mode, initial = { cards: [], history: [] }) {
   let fail = false;
   let stored = JSON.stringify(initial);
   if (mode === 'PWA') {
-    const window = {};
+    const window = { FlashLogic };
     vm.runInNewContext(source('pwa/store-local.js'), {
       window, navigator: {}, localStorage: {
         getItem: () => stored,
@@ -38,6 +38,8 @@ async function harness(t, mode, initial = { cards: [], history: [] }) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './public/logic.js') return FlashLogic;
+      if (name === 'node:os') return { homedir: () => dir };
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
         if (fail) throw new Error('write failed');
         return fs.renameSync(...args);
@@ -132,6 +134,7 @@ for (const mode of ['Node', 'PWA']) {
       ...legacy, wordNumber: null, memoryReading: '', chineseReading: '', forms: [],
     });
     assert.deepEqual(h.read(), initial);
+    assert.equal('reviewStep' in h.read().cards[0], false);
     assert.equal((await h.store.addCard(word())).card.wordNumber, 1);
     assert.deepEqual(h.read().cards[0], legacy);
   });
@@ -215,6 +218,46 @@ for (const mode of ['Node', 'PWA']) {
     assert.equal(FlashLogic.isWeakCard(afterGot), false);
     assert.equal(afterGot.streak, 1);
     assert.equal(afterGot.lapses, 1);
+    assert.equal(afterGot.reviewStep, 0);
+  });
+  test(`${mode}: legacy review steps upgrade naturally on remember`, async (t) => {
+    const day = 86400000;
+    for (const [streak, expectedStep, expectedDays] of [[1, 1, 3], [2, 2, 7], [3, 3, 14]]) {
+      const id = `legacy-${streak}`;
+      const h = await harness(t, mode, { cards: [{ ...legacy, id, streak, lapses: 0 }], history: [] });
+      const started = Date.now();
+      const result = (await h.store.gradeCard(id, 'got')).card;
+      assert.equal(result.streak, streak + 1);
+      assert.equal(result.reviewStep, expectedStep);
+      assert.ok(Math.abs(result.due - (started + expectedDays * day)) < 1000);
+    }
+  });
+  test(`${mode}: easy and again share the canonical review scheduler`, async (t) => {
+    const day = 86400000;
+    const h = await harness(t, mode, { cards: [{ ...legacy, id: 'review', streak: 0, lapses: 0 }], history: [] });
+    const started = Date.now();
+    const easy = (await h.store.gradeCard('review', 'easy')).card;
+    assert.equal(easy.streak, 1);
+    assert.equal(easy.reviewStep, 3);
+    assert.equal(easy.lapses, 0);
+    assert.ok(Math.abs(easy.due - (started + 14 * day)) < 1000);
+    assert.equal(easy.streak >= 3, false);
+    const againStarted = Date.now();
+    const again = (await h.store.gradeCard('review', 'again')).card;
+    assert.equal(again.streak, 0);
+    assert.equal(again.reviewStep, 0);
+    assert.equal(again.lapses, 1);
+    assert.ok(Math.abs(again.due - (againStarted + 10 * 60 * 1000)) < 1000);
+    const remembered = (await h.store.gradeCard('review', 'got')).card;
+    assert.equal(remembered.streak, 1);
+    assert.equal(remembered.reviewStep, 0);
+  });
+  test(`${mode}: session history distinguishes remember, easy and again`, async (t) => {
+    const h = await harness(t, mode, { cards: [], history: [] });
+    await h.store.logSession({ deck: 'Words', reviewed: 3, correct: 2, remember: 1, easy: 1, again: 1 });
+    assert.deepEqual(h.read().history[0], {
+      date: h.read().history[0].date, deck: 'Words', reviewed: 3, correct: 2, remember: 1, easy: 1, again: 1,
+    });
   });
 }
 

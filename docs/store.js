@@ -4,10 +4,6 @@
 
 (() => {
   const KEY = 'flashdesk-data';
-  const TEN_MINUTES = 10 * 60 * 1000;
-  const DAY = 24 * 60 * 60 * 1000;
-  const LADDER = [1, 3, 7, 14, 30, 60]; // days out by streak; streak ≥ 6 stays at 60
-
   const makeId = () => 'c_' + Date.now() + '_' + Math.random().toString(16).slice(2, 6);
 
   function toCard({ front, back, deck }) {
@@ -252,16 +248,7 @@
     async gradeCard(id, grade) {
       await ensureReady();
       const card = findCard(id);
-      if (grade === 'again') {
-        card.due = Date.now() + TEN_MINUTES;
-        card.streak = 0;
-        card.lapses += 1;
-      } else if (grade === 'got') {
-        card.streak += 1;
-        card.due = Date.now() + LADDER[Math.min(card.streak, LADDER.length) - 1] * DAY;
-      } else {
-        throw new Error('grade must be "again" or "got"');
-      }
+      window.FlashLogic.gradeReviewCard(card, grade);
       persist();
       return { card: clone(card) };
     },
@@ -277,9 +264,9 @@
       return { ok: true };
     },
 
-    async logSession({ deck, reviewed, correct }) {
+    async logSession({ deck, reviewed, correct, easy = 0, remember = Math.max(0, correct - easy), again = 0 }) {
       await ensureReady();
-      data.history.push({ date: localDate(), deck, reviewed, correct });
+      data.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
       persist();
       return { ok: true, logged: true };
     },
@@ -366,6 +353,9 @@
             streak: Number.isFinite(c.streak) ? c.streak : 0,
             lapses: Number.isFinite(c.lapses) ? c.lapses : 0,
             created: Number.isFinite(c.created) ? c.created : now,
+            ...(Number.isInteger(c.reviewStep) && c.reviewStep >= 0
+              && c.reviewStep < window.FlashLogic.REVIEW_INTERVAL_DAYS.length
+              ? { reviewStep: c.reviewStep } : {}),
             ...(c.deck.trim() === 'Words' ? {
               ...wordFields(c),
               wordNumber: Number.isSafeInteger(c.wordNumber) && c.wordNumber > 0 ? c.wordNumber : null,

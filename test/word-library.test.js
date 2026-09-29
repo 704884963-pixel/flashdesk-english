@@ -77,6 +77,53 @@ test('recovered historical lapse is not weak in filter, count, or status', () =>
   assert.equal(h.run("wordLearningStatus(state.cards.find(card => card.id === '136'), now).label"), '学习中');
 });
 
+test('historical lapse filter includes every Word with lapses above zero', () => {
+  const h = libraryClient();
+  assert.equal(h.run("hasHistoricalLapse(state.cards.find(card => card.id === '137'))"), false);
+  assert.equal(h.run("hasHistoricalLapse(state.cards.find(card => card.id === '136'))"), true);
+  assert.equal(h.run("hasHistoricalLapse({ deck: 'Words', streak: 5, lapses: 5 })"), true);
+  assert.equal(h.run("hasHistoricalLapse({ deck: 'Words', streak: 0 })"), false);
+  assert.deepEqual(resultIds(h, '', 'forgotten'), ['136', '135']);
+});
+
+test('weak and historical lapse filters keep their distinct meanings', () => {
+  const h = libraryClient();
+  const recovered = "state.cards.find(card => card.id === '136')";
+  assert.equal(h.run(`wordLibraryMatches(${recovered}, 'lapsed', now)`), false);
+  assert.equal(h.run(`wordLibraryMatches(${recovered}, 'forgotten', now)`), true);
+  assert.equal(h.run('wordLibraryStats(state.cards, now).lapsed'), 1);
+  assert.equal(h.run('wordLibraryStats(state.cards, now).forgotten'), 2);
+});
+
+test('historical lapse filter combines with Word Library search', () => {
+  const h = libraryClient();
+  assert.deepEqual(resultIds(h, 'expect', 'forgotten'), ['136']);
+  assert.deepEqual(resultIds(h, 'approach', 'forgotten'), []);
+});
+
+test('historical lapse chip uses the existing Word Library filter interaction', () => {
+  const h = libraryClient();
+  h.run(`handleWordLibraryClick({ target: { closest: (selector) => selector === '[data-word-filter]'
+    ? { dataset: { wordFilter: 'forgotten' } }
+    : null } });`);
+  assert.equal(h.run('state.wordLibrary.filter'), 'forgotten');
+  assert.equal(h.run("document.querySelector('#word-library').innerHTML.includes('曾经忘记')"), true);
+});
+
+test('Word cards show a subtle historical lapse count only when positive', () => {
+  const h = libraryClient();
+  assert.match(h.run("wordListItemHtml(state.cards.find(card => card.id === '136'), now)"), /曾忘 1 次/);
+  assert.match(h.run("wordListItemHtml(state.cards.find(card => card.id === '135'), now)"), /曾忘 3 次/);
+  assert.doesNotMatch(h.run("wordListItemHtml(state.cards.find(card => card.id === '137'), now)"), /曾忘/);
+});
+
+test('Sentences are excluded from historical lapse statistics', () => {
+  const sentenceWithLapse = { ...cards.at(-1), lapses: 4 };
+  const h = libraryClient([...cards.slice(0, -1), sentenceWithLapse]);
+  assert.equal(h.run('wordLibraryStats(state.cards, now).forgotten'), 2);
+  assert.equal(resultIds(h, '', 'forgotten').includes('sentence'), false);
+});
+
 test('mastered filter follows recovered streak rather than lifetime lapses', () => {
   assert.deepEqual(resultIds(libraryClient(), '', 'mastered'), ['134']);
   const recovered = { ...cards[3], id: 'recovered-mastered', wordNumber: 133, lapses: 2 };

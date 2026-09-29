@@ -191,12 +191,13 @@ test('only importable items are emitted for confirmation', () => {
 });
 
 const source = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+const FlashLogic = require('../public/logic.js');
 
 async function storeHarness(t, mode, initial = baseData()) {
   let stored = JSON.stringify(initial);
   let fail = false;
   if (mode === 'PWA') {
-    const window = {};
+    const window = { FlashLogic };
     vm.runInNewContext(source('pwa/store-local.js'), {
       window, navigator: {}, localStorage: {
         getItem: () => stored,
@@ -218,6 +219,7 @@ async function storeHarness(t, mode, initial = baseData()) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
         if (fail) throw new Error('write failed');
         return fs.renameSync(...args);
