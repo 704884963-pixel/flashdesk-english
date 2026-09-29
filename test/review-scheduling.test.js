@@ -149,3 +149,15 @@ test('Review renders three horizontal grade buttons including the secondary easy
   assert.match(styles, /\.btn-grade[^}]*white-space:\s*nowrap/s);
   assert.match(styles, /\.btn-easy\s*{[^}]*background:\s*var\(--accent-dim\)[^}]*border-color:\s*var\(--accent\)/s);
 });
+
+test('Review exposes AI pronunciation beside normal and slow speech without grading', () => {
+  const render = appSource.slice(appSource.indexOf('function renderReview()'), appSource.indexOf('function setFlipped'));
+  const handler = appSource.slice(appSource.indexOf("$('#review-area').addEventListener('click'"), appSource.indexOf("$('#quiz-area').addEventListener('click'"));
+  assert.match(render, /id="speak-front"[\s\S]*id="speak-front-slow"[\s\S]*id="speak-front-ai"/);
+  assert.match(render, /data-review-ai-pronounce/);
+  assert.match(handler, /matches\('\[data-review-ai-pronounce\]'\)[\s\S]*playAiPronunciation\(card\.front, b\)/);
+  const aiBranch = handler.slice(handler.indexOf("matches('[data-review-ai-pronounce]')"), handler.indexOf("matches('[data-speak-rate]')"));
+  assert.match(aiBranch, /preventDefault\(\)/);
+  assert.match(aiBranch, /stopPropagation\(\)/);
+  assert.doesNotMatch(aiBranch, /grade\(/);
+});

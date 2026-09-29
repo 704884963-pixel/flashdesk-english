@@ -680,6 +680,9 @@ test('AI pronunciation is ephemeral and bypasses the existing audio cache', () =
   assert.match(section, /JSON\.stringify\(\{ text: value, locale: 'en-US' \}\)/);
   assert.match(section, /AI发音中…/);
   assert.match(section, /AI发音失败/);
+  assert.match(section, /aiPronunciationLoadingLabel/);
+  assert.match(section, /button\.disabled = true/);
+  assert.match(section, /setTimeout\([\s\S]*button\.textContent = label/);
   assert.match(section, /URL\.createObjectURL\(blob\)/);
   assert.match(section, /URL\.revokeObjectURL\(objectUrl\)/);
   assert.match(section, /audio\.onended = release/);

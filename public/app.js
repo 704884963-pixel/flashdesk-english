@@ -1007,6 +1007,8 @@ function renderReview() {
             title="美式英语正常发音" aria-label="${normalLabel}">${normalLabel}</button>
           <button type="button" class="speak-front" id="speak-front-slow" data-speak-rate="0.75"
             title="美式英语慢速发音" aria-label="${slowLabel}">${slowLabel}</button>
+          <button type="button" class="speak-front speak-ai" id="speak-front-ai" data-review-ai-pronounce
+            data-ai-pronunciation-label="AI发音" title="AI 发音" aria-label="AI发音">AI发音</button>
         </div>
       </div>
       <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
@@ -1464,7 +1466,7 @@ function wordListItemHtml(card, now = Date.now()) {
   const lapses = Number(card.lapses || 0);
   return `<article class="word-list-item" data-word-card="${esc(card.id)}">
     <button type="button" class="word-list-main" data-word-open="${esc(card.id)}">
-      <span class="word-list-heading"><span class="word-number">${number}</span><strong>${esc(card.front)}</strong></span>
+      <span class="word-list-heading"><span class="word-number">${number}</span><strong title="${esc(card.front)}">${esc(card.front)}</strong></span>
       <span class="word-list-meaning">${esc(card.back)}</span>
       <span class="word-list-meta">
         <span class="word-list-meta-main">${details.forms.length ? `<span class="word-list-forms">${esc(details.forms.join(' · '))}</span><span aria-hidden="true"> · </span>` : ''}<span class="word-status word-status-${status.key}">● ${status.label}</span></span>
@@ -1472,6 +1474,9 @@ function wordListItemHtml(card, now = Date.now()) {
         ${hasHistoricalLapse(card) ? `<span class="word-list-forgotten">· 曾忘 ${lapses} 次</span>` : ''}
       </span>
     </button>
+    <button type="button" class="word-ai-pronounce" data-word-ai-pronounce="${esc(card.id)}"
+      data-ai-pronunciation-label="AI发音" data-ai-pronunciation-loading-label="加载中…"
+      aria-label="AI发音 ${esc(card.front)}">AI发音</button>
     ${wordSpeechButtons(card)}
   </article>`;
 }
@@ -1569,6 +1574,14 @@ function openEditDialog(card) {
 }
 
 function handleWordLibraryClick(e) {
+  const aiSpeech = e.target.closest('[data-word-ai-pronounce]');
+  if (aiSpeech) {
+    e.preventDefault();
+    e.stopPropagation();
+    const card = state.cards.find((item) => item.id === aiSpeech.dataset.wordAiPronounce && item.deck === 'Words');
+    if (card) void playAiPronunciation(card.front, aiSpeech);
+    return;
+  }
   const speech = e.target.closest('[data-word-speak]');
   if (speech) {
     e.preventDefault();
@@ -1832,9 +1845,18 @@ async function playAiPronunciation(text, button) {
   const value = String(text || '').trim();
   if (!value || button?.disabled) return;
   const label = button?.dataset.aiPronunciationLabel || button?.textContent || 'AI发音';
+  const loadingLabel = button?.dataset.aiPronunciationLoadingLabel || 'AI发音中…';
+  const restoreFailure = () => {
+    if (!button) return;
+    button.textContent = 'AI发音失败';
+    button.disabled = false;
+    setTimeout(() => {
+      if (!button.disabled && button.textContent === 'AI发音失败') button.textContent = label;
+    }, 1600);
+  };
   if (button) {
     button.dataset.aiPronunciationLabel = label;
-    button.textContent = 'AI发音中…';
+    button.textContent = loadingLabel;
     button.disabled = true;
   }
   try {
@@ -1862,13 +1884,13 @@ async function playAiPronunciation(text, button) {
     audio.onended = release;
     audio.onerror = () => {
       release();
-      if (button) { button.textContent = 'AI发音失败'; button.disabled = false; }
+      restoreFailure();
     };
     await audio.play();
     if (button) { button.textContent = label; button.disabled = false; }
   } catch {
     releaseAiPronunciation();
-    if (button) { button.textContent = 'AI发音失败'; button.disabled = false; }
+    restoreFailure();
   }
 }
 
@@ -2837,7 +2859,12 @@ function bindEvents() {
     }
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.matches('[data-speak-rate]')) {
+    if (b.matches('[data-review-ai-pronounce]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const card = state.cards.find((c) => c.id === state.session.currentId);
+      if (card) void playAiPronunciation(card.front, b);
+    } else if (b.matches('[data-speak-rate]')) {
       e.stopPropagation();
       const card = state.cards.find((c) => c.id === state.session.currentId);
       if (card) playEnglish(card.front, { rate: Number(b.dataset.speakRate), button: b });

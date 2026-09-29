@@ -791,7 +791,7 @@ select:focus, input:focus, textarea:focus {
 
 .word-list-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
@@ -834,10 +834,27 @@ select:focus, input:focus, textarea:focus {
 
 .word-speech-actions { display: flex; gap: 6px; }
 .word-list-item .speak-front { min-width: 60px; min-height: 36px; padding: 5px 7px; font-size: 0.7rem; }
+.word-ai-pronounce {
+  align-self: start;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.word-ai-pronounce:disabled { opacity: .65; }
 
 @media (hover: hover) {
   .word-list-item:hover { border-color: var(--accent); }
   .word-list-main:hover .word-list-heading strong { color: var(--accent); }
+  .word-ai-pronounce:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 .word-library-back { margin: 0 0 12px 2px; padding: 7px 0; color: var(--muted); font-weight: 700; }
@@ -1142,8 +1159,11 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   .audio-cache-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .audio-cache-actions .btn { width: 100%; }
   .speech-actions { position: static; margin-top: 8px; max-width: none; }
-  .speech-actions .speak-front { flex: 1 1 120px; }
+  .speech-actions .speak-front { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
   .word-list-item { gap: 6px; padding: 8px 10px; }
+  .word-list-heading { gap: 6px; }
+  .word-list-heading strong { font-size: clamp(1rem, 4.8vw, 1.18rem); }
+  .word-ai-pronounce { padding-inline: 7px; }
   .word-list-item .word-speech-actions { flex-direction: column; }
   .word-list-item .speak-front { min-width: 58px; min-height: 36px; padding: 5px 6px; font-size: 0.68rem; }
   .word-detail-card { padding: 20px 16px; }
