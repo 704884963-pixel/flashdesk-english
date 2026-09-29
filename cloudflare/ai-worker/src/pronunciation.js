@@ -9,7 +9,32 @@ export function validatePronunciationRequest(value) {
   return { text, locale };
 }
 
+function decodeBase64Audio(value) {
+  let encoded = String(value || '').trim();
+  if (encoded.startsWith('data:')) {
+    const match = encoded.match(/^data:audio\/mpeg;base64,([\s\S]*)$/i);
+    if (!match) throw new Error('invalid pronunciation audio');
+    encoded = match[1].trim();
+  }
+  encoded = encoded.replace(/\s+/g, '');
+  if (!encoded || encoded.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    throw new Error('invalid pronunciation audio');
+  }
+  const firstPadding = encoded.indexOf('=');
+  if (firstPadding !== -1 && firstPadding < encoded.length - (encoded.endsWith('==') ? 2 : 1)) {
+    throw new Error('invalid pronunciation audio');
+  }
+  const padded = encoded.padEnd(encoded.length + ((4 - (encoded.length % 4)) % 4), '=');
+  let binary;
+  try { binary = atob(padded); } catch { throw new Error('invalid pronunciation audio'); }
+  if (!binary.length) throw new Error('empty pronunciation audio');
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
 function audioBody(value) {
+  if (value && typeof value === 'object' && typeof value.audio === 'string') {
+    return decodeBase64Audio(value.audio);
+  }
   if (typeof Response !== 'undefined' && value instanceof Response) {
     const contentType = String(value.headers.get('Content-Type') || '');
     if (contentType && !contentType.startsWith('audio/')) throw new Error('invalid pronunciation audio');
