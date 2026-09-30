@@ -575,6 +575,18 @@ test('English helper UI has four quick templates and safe escaped answer renderi
   for (const label of ['查单词', '近义词', '词义区别', '简单例句']) assert.match(section, new RegExp(label));
   assert.match(section, /esc\(line\)/); assert.doesNotMatch(section, /innerHTML\s*=\s*state\.ai\.helperAnswer/);
 });
+test('English helper quick actions use a complete two-column mobile grid', () => {
+  const mobile = stylesSource.slice(stylesSource.indexOf('@media (max-width: 560px)'));
+  assert.match(mobile, /\.ai-helper-quick \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)[^}]*overflow: visible/);
+  assert.match(mobile, /\.ai-helper-quick \.btn \{[^}]*width: 100%;[^}]*min-width: 0/);
+  assert.doesNotMatch(mobile, /\.ai-helper-quick \{[^}]*overflow-x: auto/);
+});
+test('English helper submits through the shared AI endpoint and Bearer authorization', () => {
+  const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function renderAiSentences'));
+  assert.match(section, /buildEnglishHelperRequest\(query\)/);
+  assert.match(section, /aiFetch\('\/ai'/);
+  assert.match(appSource, /Authorization: `Bearer \$\{aiSettings\.token\}`/);
+});
 test('English helper does not send history or write learning data', () => {
   const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function renderAiSentences'));
   assert.match(section, /buildEnglishHelperRequest\(query\)/);
@@ -632,11 +644,11 @@ test('Sentence and Article generation both record response timing', () => {
 });
 test('lookup shows an immediate loading state in the current dialog', () => {
   const section = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));
-  assert.match(section, /openAiSentenceWord\(word, sentence, \{ loading: true \}\)/);
+  assert.match(section, /openAiSentenceWord\(word, sentence, \{ loading: true, reading \}\)/);
   assert.match(appSource, /正在查询…/);
 });
 test('lookup failure stays in the dialog and offers retry without an empty add action', () => {
-  assert.match(appSource, /openAiSentenceWord\(word, sentence, \{ error: err\.message \}\)/);
+  assert.match(appSource, /openAiSentenceWord\(word, sentence, \{ error: err\.message, reading \}\)/);
   assert.match(appSource, /data-ai-retry-word/);
   assert.match(appSource, /查询失败/);
 });
@@ -660,7 +672,7 @@ test('AI word inline editor prefills every field from the lookup draft', () => {
 });
 test('加入单词库 expands the inline editor without saving', () => {
   const handler = appSource.slice(appSource.indexOf("$('#article-action-content').addEventListener('click'"), appSource.indexOf("$('#article-action-content').addEventListener('submit'"));
-  assert.match(handler, /dataset\.aiEditWord[\s\S]*?openAiSentenceWord\([\s\S]*?\{ editing: true \}/);
+  assert.match(handler, /dataset\.aiEditWord[\s\S]*?openAiSentenceWord\([\s\S]*?\{ editing: true, reading:/);
   assert.doesNotMatch(handler, /saveNewCard|FlashStore\.addCard/);
 });
 test('single Add and AI inline Add share validation and persistence helpers', () => {
@@ -676,7 +688,7 @@ test('shared new-card save keeps returned numbering state in sync', () => {
 test('inline AI save handles duplicates as existing Words without creating another card', () => {
   const section = appSource.slice(appSource.indexOf('async function saveInlineAiWord'), appSource.indexOf('async function setArticleUnknown'));
   assert.match(section, /buildWordLookup\(state\.cards\)\.get/);
-  assert.match(section, /openAiSentenceWord\(word, sentence\)/);
+  assert.match(section, /openAiSentenceWord\(word, sentence, \{ reading:/);
 });
 test('inline AI save refreshes lookup without replacing the generated result', () => {
   const section = appSource.slice(appSource.indexOf('async function saveInlineAiWord'), appSource.indexOf('async function setArticleUnknown'));
@@ -698,9 +710,11 @@ test('AI Sentence Word dialog pronounces the exact clicked token', () => {
   assert.doesNotMatch(dialog, /data-ai-pronounce="\$\{esc\((?:draft\.front|result\.baseForm|card\.front)\)\}"/);
 });
 
-test('Article Word dialog is unchanged by the independent AI pronunciation channel', () => {
+test('Reading Word delegates to the shared lookup dialog and keeps pronunciation controls', () => {
   const dialog = appSource.slice(appSource.indexOf('function openArticleWord'), appSource.indexOf('function aiLookupExistingCard'));
-  assert.doesNotMatch(dialog, /data-ai-pronounce/);
+  assert.match(dialog, /lookupAiSentenceWord\(word, sentence, \{ reading: true \}\)/);
+  const shared = appSource.slice(appSource.indexOf('function openAiSentenceWord'), appSource.indexOf('async function lookupAiSentenceWord'));
+  assert.match(shared, /data-article-speak/);
 });
 
 test('AI pronunciation controls use their independent playback function', () => {

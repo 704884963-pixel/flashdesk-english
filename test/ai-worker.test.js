@@ -247,6 +247,17 @@ test('incomplete pronunciation drafts trigger at most one correction request', a
   const body = await response.json();
   assert.equal(calls, 2); assert.deepEqual(body.data, lookupData); assert.equal(body.timing.providerCalls, 2);
 });
+test('engineering pronunciation drafts are filled by the single correction response', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const first = { word: 'engineering', baseForm: 'engineering', meaningZh: '工程学', meaningInContextZh: '工程学', memoryReading: '', chineseReading: '' };
+  const corrected = { ...first, memoryReading: 'en + gi + NEER + ing', chineseReading: '恩-吉-尼尔-英（仅近似）' };
+  const fetchImpl = async () => { calls += 1; return (await upstream(JSON.stringify(calls === 1 ? first : corrected)))(); };
+  const response = await handleRequest(request('lookup_word', { word: 'engineering', sentence: 'She studies engineering at college.' }), env, fetchImpl, undefined, Date.now, async () => {});
+  const body = await response.json();
+  assert.equal(calls, 2);
+  assert.equal(body.data.memoryReading, corrected.memoryReading);
+  assert.equal(body.data.chineseReading, corrected.chineseReading);
+});
 test('a still-incomplete pronunciation correction is accepted without a third request', async () => {
   const { handleRequest } = await load('index.js'); let calls = 0;
   const incomplete = { ...lookupData, memoryReading: '', chineseReading: '' };

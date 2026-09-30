@@ -138,8 +138,25 @@ test('Article Word and Sentence pronunciation both route through playEnglish', (
   const actionSource = appSource.slice(appSource.indexOf("$('#article-action-content').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
   assert.match(actionSource, /playEnglish\(button\.dataset\.articleSpeak/);
   assert.doesNotMatch(actionSource, /speechSynthesis|speakEnglish/);
-  assert.match(appSource, /function openArticleWord[\s\S]*?data-article-speak/);
+  assert.match(appSource, /function openArticleWord[\s\S]*?lookupAiSentenceWord\(word, sentence, \{ reading: true \}\)/);
+  assert.match(appSource, /function openAiSentenceWord[\s\S]*?data-article-speak/);
   assert.match(appSource, /function openArticleSentence[\s\S]*?data-article-speak/);
+});
+test('Reading Word lookup reuses the shared lookup_word flow with the complete containing sentence', () => {
+  const handlerSource = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')"));
+  assert.match(handlerSource, /word\.closest\('\[data-sentence-text\]'\)\?\.dataset\.sentenceText/);
+  assert.match(handlerSource, /await openArticleWord\(word\.dataset\.articleWord, sentence\)/);
+  const openSource = appSource.slice(appSource.indexOf('function openArticleWord'), appSource.indexOf('function aiLookupExistingCard'));
+  assert.match(openSource, /lookupAiSentenceWord\(word, sentence, \{ reading: true \}\)/);
+});
+test('Reading unknown Word dialog shows lookup fields and never saves automatically', () => {
+  const dialogSource = appSource.slice(appSource.indexOf('function openAiSentenceWord'), appSource.indexOf('async function lookupAiSentenceWord'));
+  for (const field of ['meaningZh', 'meaningInContextZh', 'memoryReading', 'chineseReading']) {
+    assert.match(dialogSource, new RegExp(`result\\.${field}`));
+  }
+  assert.match(dialogSource, /reading \? \(unknown/);
+  const lookupSource = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('async function showAiSentenceWord'));
+  assert.doesNotMatch(lookupSource, /addCard|saveNewCard|updateCard|gradeCard/);
 });
 test('Article progress is throttled rather than saved for every observer event', () => assert.match(appSource, /setTimeout\(flushArticleProgress, 1500\)/));
 
@@ -430,7 +447,8 @@ test('marking unknown does not call the Word creation API', () => {
 });
 test('unknown and add-to-library are separate bottom-sheet actions', () => {
   assert.match(appSource, /data-article-unknown/);
-  assert.match(appSource, /data-article-add-word/);
+  assert.match(appSource, /data-ai-edit-word/);
+  assert.match(appSource, /id="ai-word-inline-form"/);
   assert.match(appSource, /data-article-known/);
 });
 test('PWA unknownWords persist across ArticleStore instances', async () => {

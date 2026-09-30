@@ -1161,8 +1161,8 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 @media (max-width: 560px) {
   .backup-summary { grid-template-columns: 1fr; }
   .backup-actions .btn, .backup-file-label { min-height: 42px; }
-  .ai-helper-quick { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 3px; }
-  .ai-helper-quick .btn { flex: 0 0 auto; }
+  .ai-helper-quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; padding-bottom: 0; }
+  .ai-helper-quick .btn { width: 100%; min-width: 0; }
   .app { padding: 10px 14px 48px; }
   .header { padding: 5px 0 4px; }
   .wordmark h1 { font-size: 1.55rem; }

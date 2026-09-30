@@ -2562,30 +2562,8 @@ async function startArticleParagraphNarration(rate, paragraphIndex) {
   }
 }
 
-function openArticleWord(word) {
-  const key = FlashArticleUtils.wordKey(word);
-  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
-  const card = lookup.get(key);
-  const unknown = state.article.unknownWords.has(key);
-  const details = card ? wordDetails(card) : null;
-  $('#article-action-content').innerHTML = `<div class="article-sheet">
-    <div class="micro-label">英文单词</div><h3>${esc(word)}</h3>
-    ${card ? `<p class="article-learned-label">已学习：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
-      <div class="word-detail-meaning">${esc(card.back)}</div>
-      ${details.memoryReading ? `<div class="word-detail"><span class="micro-label">🧠 发音拆解</span><div>${esc(details.memoryReading)}</div></div>` : ''}
-      ${details.chineseReading ? `<div class="word-detail"><span class="micro-label">🗣 中文近似</span><div>${esc(details.chineseReading)}</div></div>` : ''}`
-      : '<p class="muted">未加入单词库</p>'}
-    ${unknown ? '<p class="article-unknown-label">不认识</p>' : ''}
-    <div class="article-sheet-actions">
-      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
-      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
-      ${unknown
-        ? `<button type="button" class="btn" data-article-known="${esc(word)}">我现在认识了</button>`
-        : `<button type="button" class="btn" data-article-unknown="${esc(word)}">标记不认识</button>`}
-      ${card ? '' : `<button type="button" class="btn btn-primary" data-article-add-word="${esc(word)}">加入单词库</button>`}
-    </div></div>`;
-  const dialog = $('#article-action-dialog');
-  if (!dialog.open) dialog.showModal();
+function openArticleWord(word, sentence) {
+  return lookupAiSentenceWord(word, sentence, { reading: true });
 }
 
 function aiLookupExistingCard(word, result) {
@@ -2595,10 +2573,13 @@ function aiLookupExistingCard(word, result) {
     || lookup.get(FlashArticleUtils.wordKey(word)) || null;
 }
 
-function openAiSentenceWord(word, sentence, { error = '', editing = false, loading = false, meaningEditing = false } = {}) {
+function openAiSentenceWord(word, sentence, {
+  error = '', editing = false, loading = false, meaningEditing = false, reading = false,
+} = {}) {
   const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
   const result = state.ai.lookupCache.get(cacheKey) || null;
   const card = aiLookupExistingCard(word, result);
+  const unknown = reading && state.article.unknownWords.has(FlashArticleUtils.wordKey(word));
   const details = card ? wordDetails(card) : null;
   const memoryReading = card ? details.memoryReading || result?.memoryReading || '' : '';
   const chineseReading = card ? details.chineseReading || result?.chineseReading || '' : '';
@@ -2616,7 +2597,7 @@ function openAiSentenceWord(word, sentence, { error = '', editing = false, loadi
       ${result ? detail('本句含义', result.meaningInContextZh)
         : loading ? '<div class="word-detail"><span class="micro-label">本句含义</span><div class="muted">正在分析…</div></div>'
         : error ? '<div class="word-detail"><span class="micro-label">本句含义</span><div class="muted">本句含义暂时无法获取</div></div>' : ''}
-      ${meaningEditing ? `<form id="ai-meaning-form" class="ai-word-inline-form" data-ai-card-id="${esc(card.id)}" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">
+      ${meaningEditing ? `<form id="ai-meaning-form" class="ai-word-inline-form" data-ai-card-id="${esc(card.id)}" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">
           <label class="field"><span class="micro-label">最终释义（可编辑）</span><textarea id="ai-meaning-back" rows="3" required>${esc(mergedMeaning)}</textarea></label>
           <p class="ai-error" id="ai-meaning-error" hidden></p>
           <div class="form-actions"><button type="button" class="btn" data-ai-cancel-meaning>取消</button><button type="submit" class="btn btn-primary" id="ai-meaning-save">确认保存</button></div>
@@ -2624,7 +2605,7 @@ function openAiSentenceWord(word, sentence, { error = '', editing = false, loadi
       : loading ? '<p class="muted ai-word-loading">正在查询…</p>'
       : error ? `<p class="ai-error">查询失败：${esc(error)}</p>`
       : result && editing ? `${detail('本句中', result.meaningInContextZh)}
-        <form id="ai-word-inline-form" class="ai-word-inline-form" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">
+        <form id="ai-word-inline-form" class="ai-word-inline-form" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">
           <label class="field"><span class="micro-label">英文单词</span><input id="ai-word-front" required value="${esc(draft.front)}"></label>
           <label class="field"><span class="micro-label">中文意思</span><textarea id="ai-word-back" rows="2" required>${esc(draft.back)}</textarea></label>
           <label class="field"><span class="micro-label">🧠 发音拆解</span><input id="ai-word-memory-reading" value="${esc(draft.memoryReading)}"></label>
@@ -2641,19 +2622,22 @@ function openAiSentenceWord(word, sentence, { error = '', editing = false, loadi
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
       <button type="button" class="btn" data-ai-pronounce="${esc(word)}">AI发音</button>
-      ${canSupplement && !meaningEditing ? `<button type="button" class="btn" data-ai-merge-meaning="${esc(word)}" data-ai-sentence="${esc(sentence)}">＋补充到词库释义</button>` : ''}
+      ${reading ? (unknown
+        ? `<button type="button" class="btn" data-article-known="${esc(word)}" data-article-sentence="${esc(sentence)}">我现在认识了</button>`
+        : `<button type="button" class="btn" data-article-unknown="${esc(word)}" data-article-sentence="${esc(sentence)}">标记不认识</button>`) : ''}
+      ${canSupplement && !meaningEditing ? `<button type="button" class="btn" data-ai-merge-meaning="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">＋补充到词库释义</button>` : ''}
       ${card || loading || editing ? ''
-        : error ? `<button type="button" class="btn" data-ai-retry-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">重试</button>`
-        : result ? `<button type="button" class="btn btn-primary" data-ai-edit-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">加入单词库</button>` : ''}
+        : error ? `<button type="button" class="btn" data-ai-retry-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">重试</button>`
+        : result ? `<button type="button" class="btn btn-primary" data-ai-edit-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">加入单词库</button>` : ''}
     </div></div>`;
   const dialog = $('#article-action-dialog');
   if (!dialog.open) dialog.showModal();
 }
 
-async function lookupAiSentenceWord(word, sentence) {
+async function lookupAiSentenceWord(word, sentence, { reading = false } = {}) {
   const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
-  if (state.ai.lookupCache.has(cacheKey)) return openAiSentenceWord(word, sentence);
-  openAiSentenceWord(word, sentence, { loading: true });
+  if (state.ai.lookupCache.has(cacheKey)) return openAiSentenceWord(word, sentence, { reading });
+  openAiSentenceWord(word, sentence, { loading: true, reading });
   const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   try {
     const request = FlashAiLearning.buildLookupWordRequest(word, sentence);
@@ -2662,9 +2646,9 @@ async function lookupAiSentenceWord(word, sentence) {
     state.ai.service = { provider: response.provider, model: response.model };
     rememberAiTiming('lookup_word', response, started);
     refreshAiServiceStatus();
-    openAiSentenceWord(word, sentence);
+    openAiSentenceWord(word, sentence, { reading });
   } catch (err) {
-    openAiSentenceWord(word, sentence, { error: err.message });
+    openAiSentenceWord(word, sentence, { error: err.message, reading });
   }
 }
 
@@ -2705,7 +2689,7 @@ async function saveInlineAiWord(form) {
     const result = state.ai.lookupCache.get(cacheKey);
     if (result) state.ai.lookupCache.set(cacheKey, { ...result, baseForm: card.front });
     refreshAiSentenceWordLookup();
-    openAiSentenceWord(word, sentence);
+    openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
     const label = $('#article-action-content .article-learned-label');
     if (label) label.textContent = `✓ 已加入 ${card.wordNumber ? `#${card.wordNumber} ` : ''}${card.front}`;
   } catch (err) {
@@ -2715,7 +2699,7 @@ async function saveInlineAiWord(form) {
       const result = state.ai.lookupCache.get(cacheKey);
       if (result) state.ai.lookupCache.set(cacheKey, { ...result, baseForm: existing.front });
       refreshAiSentenceWordLookup();
-      openAiSentenceWord(word, sentence);
+      openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
       return;
     }
     error.hidden = false; error.textContent = err.message;
@@ -2744,14 +2728,14 @@ async function saveAiMeaningSupplement(form) {
     if (index !== -1) state.cards[index] = updated;
     state.article.cache.clear();
     refreshAiSentenceWordLookup();
-    openAiSentenceWord(word, sentence);
+    openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
     toast('词库释义已更新');
   } catch (err) {
     error.hidden = false; error.textContent = `保存失败：${err.message}`; save.disabled = false;
   }
 }
 
-async function setArticleUnknown(word, unknown) {
+async function setArticleUnknown(word, unknown, sentence = '') {
   try {
     const words = await ArticleStore.setUnknownWord(word, unknown);
     state.article.unknownWords = new Set(FlashArticleUtils.normalizeUnknownWords(words));
@@ -2765,7 +2749,7 @@ async function setArticleUnknown(word, unknown) {
         element.classList.toggle('unknown', state.article.unknownWords.has(element.dataset.wordKey));
       });
     }
-    openArticleWord(word);
+    openArticleWord(word, sentence);
   } catch (err) {
     toast(`阅读词汇状态保存失败：${err.message}`);
   }
@@ -3212,7 +3196,8 @@ function bindEvents() {
     if (word) {
       e.preventDefault();
       e.stopPropagation();
-      openArticleWord(word.dataset.articleWord);
+      const sentence = word.closest('[data-sentence-text]')?.dataset.sentenceText || '';
+      await openArticleWord(word.dataset.articleWord, sentence);
       return;
     }
     const sentence = e.target.closest('[data-sentence-index]');
@@ -3258,18 +3243,18 @@ function bindEvents() {
     } else if (button.dataset.articleSpeak !== undefined) {
       playEnglish(button.dataset.articleSpeak, { rate: Number(button.dataset.rate) || 1, button });
     } else if (button.dataset.aiRetryWord !== undefined) {
-      await lookupAiSentenceWord(button.dataset.aiRetryWord, button.dataset.aiSentence);
+      await lookupAiSentenceWord(button.dataset.aiRetryWord, button.dataset.aiSentence, { reading: button.dataset.aiReading === 'true' });
     } else if (button.dataset.aiEditWord !== undefined) {
-      openAiSentenceWord(button.dataset.aiEditWord, button.dataset.aiSentence, { editing: true });
+      openAiSentenceWord(button.dataset.aiEditWord, button.dataset.aiSentence, { editing: true, reading: button.dataset.aiReading === 'true' });
     } else if (button.dataset.aiMergeMeaning !== undefined) {
-      openAiSentenceWord(button.dataset.aiMergeMeaning, button.dataset.aiSentence, { meaningEditing: true });
+      openAiSentenceWord(button.dataset.aiMergeMeaning, button.dataset.aiSentence, { meaningEditing: true, reading: button.dataset.aiReading === 'true' });
     } else if (button.hasAttribute('data-ai-cancel-meaning')) {
       const form = button.closest('#ai-meaning-form');
-      if (form) openAiSentenceWord(form.dataset.aiWord, form.dataset.aiSentence);
+      if (form) openAiSentenceWord(form.dataset.aiWord, form.dataset.aiSentence, { reading: form.dataset.aiReading === 'true' });
     } else if (button.dataset.articleUnknown !== undefined) {
-      await setArticleUnknown(button.dataset.articleUnknown, true);
+      await setArticleUnknown(button.dataset.articleUnknown, true, button.dataset.articleSentence);
     } else if (button.dataset.articleKnown !== undefined) {
-      await setArticleUnknown(button.dataset.articleKnown, false);
+      await setArticleUnknown(button.dataset.articleKnown, false, button.dataset.articleSentence);
     } else if (button.dataset.articleAddWord !== undefined) {
       prefillArticleCard('Words', button.dataset.articleAddWord);
     } else if (button.dataset.articleAddSentence !== undefined) {
