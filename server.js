@@ -150,6 +150,31 @@ function saveArticles(articleData) {
   fs.renameSync(temp, ARTICLE_FILE);
 }
 
+function validateLearningSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.cards) || !Array.isArray(snapshot.history)) {
+    throw new Error('learning data is invalid');
+  }
+  if (snapshot.cards.some((card) => !card || typeof card !== 'object'
+      || typeof card.front !== 'string' || !card.front.trim()
+      || typeof card.back !== 'string' || !card.back.trim()
+      || typeof card.deck !== 'string' || !card.deck.trim())) {
+    throw new Error('card data is invalid');
+  }
+  return cloneData(snapshot);
+}
+
+function validateArticleSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.articles)
+      || !Array.isArray(snapshot.unknownWords)) throw new Error('article data is invalid');
+  if (snapshot.articles.some((article) => !article || typeof article !== 'object'
+      || typeof article.id !== 'string' || !article.id
+      || typeof article.title !== 'string' || !article.title.trim()
+      || typeof article.content !== 'string' || !article.content.trim())) {
+    throw new Error('article data is invalid');
+  }
+  return { articles: cloneData(snapshot.articles), unknownWords: normalizeUnknownWords(snapshot.unknownWords) };
+}
+
 function makeArticleId() {
   return 'a_' + Date.now() + '_' + Math.random().toString(16).slice(2, 8);
 }
@@ -253,6 +278,35 @@ function readBody(req) {
 }
 
 async function handleApi(req, res, pathname) {
+  if (req.method === 'GET' && pathname === '/api/backup/learning') {
+    return sendJSON(res, 200, cloneData(data));
+  }
+
+  if (req.method === 'PUT' && pathname === '/api/backup/learning') {
+    const body = await readBody(req);
+    let replacement;
+    try { replacement = validateLearningSnapshot(body); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    const previous = data;
+    data = replacement;
+    try { saveData(); }
+    catch (err) { data = previous; throw err; }
+    return sendJSON(res, 200, cloneData(data));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/articles/backup') {
+    return sendJSON(res, 200, loadArticles());
+  }
+
+  if (req.method === 'PUT' && pathname === '/api/articles/backup') {
+    const body = await readBody(req);
+    let replacement;
+    try { replacement = validateArticleSnapshot(body); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    saveArticles(replacement);
+    return sendJSON(res, 200, replacement);
+  }
+
   if (req.method === 'GET' && pathname === '/api/articles') {
     return sendJSON(res, 200, { articles: loadArticles().articles });
   }

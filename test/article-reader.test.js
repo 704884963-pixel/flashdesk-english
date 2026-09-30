@@ -163,16 +163,19 @@ function fakeIndexedDb({ legacyArticles = false } = {}) {
     });
     return req;
   }
-  function transaction(storeMap) {
+  function transaction(storeMaps, multiple = false) {
     const tx = {
       pending: 0, completed: false, error: null,
-      objectStore: () => ({
+      objectStore: (name) => {
+        const storeMap = multiple ? storeMaps.get(name) : storeMaps;
+        return ({
         getAll: () => request(tx, () => [...storeMap.values()].map((v) => structuredClone(v))),
         get: (id) => request(tx, () => storeMap.has(id) ? structuredClone(storeMap.get(id)) : undefined),
         add: (value) => request(tx, () => { if (storeMap.has(value.id)) throw new Error('duplicate'); storeMap.set(value.id, structuredClone(value)); }, true),
         put: (value) => request(tx, () => storeMap.set(value.id, structuredClone(value)), true),
         delete: (id) => request(tx, () => storeMap.delete(id), true),
-      }),
+        clear: () => request(tx, () => storeMap.clear(), true),
+      }); },
       finish() { this.pending -= 1; if (!this.pending && !this.completed) { this.completed = true; asyncEvent(() => this.oncomplete?.()); } },
       fail(err) { this.error = err; this.completed = true; asyncEvent(() => { this.onerror?.(); this.onabort?.(); }); },
       abort() { this.fail(new Error('aborted')); },
@@ -190,7 +193,7 @@ function fakeIndexedDb({ legacyArticles = false } = {}) {
         req.result = {
           objectStoreNames: { contains: (store) => record.stores.has(store) },
           createObjectStore(store) { record.stores.set(store, new Map()); },
-          transaction(store) { return transaction(record.stores.get(store)); },
+          transaction(store) { return transaction(Array.isArray(store) ? record.stores : record.stores.get(store), Array.isArray(store)); },
         };
         if (fresh || version > record.version) {
           req.onupgradeneeded?.();
@@ -237,6 +240,14 @@ test('PWA Article save failure leaves no partial Article', async () => {
   await assert.rejects(store.create(sample), /write failed|保存失败/);
   idb.setFail(false);
   assert.equal((await store.list()).length, 0);
+});
+test('PWA Article backup snapshot replaces Articles and unknownWords atomically', async () => {
+  const store = createArticleStore(fakeIndexedDb(), Utils);
+  await store.create(sample); await store.setUnknownWord('old', true);
+  const replacement = { articles: [{ id: 'restored', ...sample, createdAt: 1, updatedAt: 1, lastReadAt: null, progressSentenceIndex: 0, progressPercent: 0 }], unknownWords: [' New '] };
+  await store.replaceSnapshot(replacement);
+  assert.deepEqual((await store.exportSnapshot()).articles.map((item) => item.id), ['restored']);
+  assert.deepEqual(await store.getUnknownWords(), ['new']);
 });
 
 async function nodeArticleHarness(t) {

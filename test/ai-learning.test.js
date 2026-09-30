@@ -351,10 +351,10 @@ test('generated Article word click passes its current Sentence to the shared loo
   assert.match(handler, /aiArticleSentenceAt\(preview\.data\.content, articleWord\.dataset\.aiArticleSentenceIndex\)/);
   assert.match(handler, /showAiSentenceWord\(articleWord\.dataset\.aiArticleWord, sentence\)/);
 });
-test('generated Article Words and forms use the shared existing-card lookup without AI', () => {
+test('generated Article Words and forms show local data and still request contextual AI', () => {
   const show = appSource.slice(appSource.indexOf('async function showAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
-  assert.match(show, /aiLookupExistingCard\(word, null\)/);
-  assert.ok(show.indexOf('aiLookupExistingCard(word, null)') < show.indexOf('lookupAiSentenceWord'));
+  assert.match(show, /await lookupAiSentenceWord/);
+  assert.match(appSource, /const card = aiLookupExistingCard\(word, result\)/);
   assert.match(appSource, /FlashArticleUtils\.buildWordLookup\(state\.cards\)/);
 });
 test('saving an inline Word refreshes both Sentence and Article preview lookups', () => {
@@ -527,6 +527,9 @@ test('lookup draft preserves pronunciation guidance fields', () => assert.deepEq
 test('lookup draft records the clicked inflection when it differs from baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('students', { baseForm: 'student', meaningZh: '学生' }).forms, ['students']));
 test('lookup draft leaves forms empty when clicked word equals baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('student', { baseForm: 'student', meaningZh: '学生' }).forms, []));
 test('lookup draft ignores model-guessed forms beyond the actually clicked token', () => assert.deepEqual(Ai.wordDraftFromLookup('students', { baseForm: 'student', meaningZh: '学生', forms: ['studenting'] }).forms, ['students']));
+test('context meaning merge splits Chinese and English punctuation and removes duplicates', () => assert.equal(Ai.mergeMeanings('智能体；客服人员', '客服人员, 客服代表\n服务人员'), '智能体；客服人员；客服代表；服务人员'));
+test('English helper builds one independent provider-neutral query', () => assert.deepEqual(Ai.buildEnglishHelperRequest(' customer 和 client？ '), { task: 'english_helper', context: { query: 'customer 和 client？' }, options: {} }));
+test('English helper rejects an empty query', () => assert.throws(() => Ai.buildEnglishHelperRequest('  '), /不能为空/));
 test('AI Sentence rendering reuses the Article word tokenizer', () => assert.match(appSource, /function interactiveWordHtml[\s\S]*?FlashArticleUtils\.wordTokens/));
 test('AI Sentence word tokens are clickable while punctuation stays outside token spans', () => { assert.match(appSource, /data-ai-sentence-word/); assert.match(appSource, /value\.slice\(position, token\.index\)/); });
 test('existing front and forms lookup reuse the canonical Article lookup', () => { const lookup = ArticleUtils.buildWordLookup([{ deck: 'Words', front: 'expect', forms: ['expected'] }]); assert.equal(lookup.get('expect').front, 'expect'); assert.equal(lookup.get('expected').front, 'expect'); });
@@ -537,10 +540,45 @@ test('unknown AI Sentence Word starts lookup immediately without an AI lookup bu
   assert.match(handler, /await showAiSentenceWord\(word\.dataset\.aiSentenceWord, sentence\.english\)/);
   assert.doesNotMatch(appSource, /AI 查中文|data-ai-lookup-word/);
 });
-test('existing Word or form match bypasses lookup_word', () => {
+test('existing Word or form match also requests contextual lookup_word', () => {
   const section = appSource.slice(appSource.indexOf('async function showAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
-  assert.match(section, /if \(aiLookupExistingCard\(word, null\)\) return openAiSentenceWord/);
   assert.match(section, /await lookupAiSentenceWord/);
+  assert.doesNotMatch(section, /return openAiSentenceWord/);
+});
+test('existing Word dialog renders local data immediately while contextual meaning loads', () => {
+  const section = appSource.slice(appSource.indexOf('function openAiSentenceWord'), appSource.indexOf('async function lookupAiSentenceWord'));
+  assert.match(section, /词库释义/); assert.match(section, /本句含义/); assert.match(section, /正在分析/);
+  assert.match(section, /details\.memoryReading \|\| result\?\.memoryReading/);
+  assert.match(section, /details\.chineseReading \|\| result\?\.chineseReading/);
+});
+test('existing Word AI result is reference-only until supplement confirmation', () => {
+  const lookup = appSource.slice(appSource.indexOf('async function lookupAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
+  assert.doesNotMatch(lookup, /updateCard|addCard|saveNewCard/);
+  assert.match(appSource, /data-ai-merge-meaning/); assert.match(appSource, /id="ai-meaning-form"/);
+});
+test('meaning supplement reuses updateCard and preserves pronunciation and forms', () => {
+  const section = appSource.slice(appSource.indexOf('async function saveAiMeaningSupplement'), appSource.indexOf('async function setArticleUnknown'));
+  assert.match(section, /FlashStore\.updateCard/); assert.match(section, /memoryReading: details\.memoryReading/);
+  assert.match(section, /chineseReading: details\.chineseReading/); assert.match(section, /forms: details\.forms/);
+});
+test('cancelling meaning supplement never writes card data', () => {
+  const actions = appSource.slice(appSource.indexOf("$('#article-action-content').addEventListener('click'"), appSource.indexOf("$('#article-action-content').addEventListener('submit'"));
+  const branch = actions.slice(actions.indexOf("data-ai-cancel-meaning"));
+  assert.match(branch, /openAiSentenceWord/); assert.doesNotMatch(branch, /updateCard/);
+});
+test('English helper appears inside AI Learning rather than primary navigation', () => {
+  assert.match(appSource, /data-ai-mode="helper"/); assert.match(appSource, /AI 英语助手/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'public/index.html'), 'utf8'), /data-view="helper"/);
+});
+test('English helper UI has four quick templates and safe escaped answer rendering', () => {
+  const section = appSource.slice(appSource.indexOf('function helperAnswerHtml'), appSource.indexOf('function renderAiSentences'));
+  for (const label of ['查单词', '近义词', '词义区别', '简单例句']) assert.match(section, new RegExp(label));
+  assert.match(section, /esc\(line\)/); assert.doesNotMatch(section, /innerHTML\s*=\s*state\.ai\.helperAnswer/);
+});
+test('English helper does not send history or write learning data', () => {
+  const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function renderAiSentences'));
+  assert.match(section, /buildEnglishHelperRequest\(query\)/);
+  assert.doesNotMatch(section, /aiHistory|FlashStore|ArticleStore|rememberAiGeneration|localStorage/);
 });
 test('lookup_word session cache is checked before the AI request', () => assert.match(appSource, /if \(state\.ai\.lookupCache\.has\(cacheKey\)\) return openAiSentenceWord/));
 test('lookup_word records provider timing only after a cache miss', () => {

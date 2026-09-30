@@ -17,6 +17,8 @@
 
   window.ArticleStore = {
     list: async () => (await api('/api/articles')).articles,
+    exportSnapshot: () => api('/api/articles/backup'),
+    replaceSnapshot: (snapshot) => api('/api/articles/backup', json('PUT', snapshot)),
     getUnknownWords: async () => (await api('/api/articles/profile')).unknownWords,
     setUnknownWord: async (word, unknown) => (
       await api('/api/articles/profile/unknown-word', json('PATCH', { word, unknown }))

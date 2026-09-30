@@ -266,8 +266,14 @@
   }
 
   function buildAiRequest(task, context, options = {}) {
-    if (!['generate_sentences', 'generate_article', 'translate_article', 'lookup_word'].includes(task)) throw new Error('unknown AI task');
+    if (!['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper'].includes(task)) throw new Error('unknown AI task');
     return { task, context, options };
+  }
+
+  function buildEnglishHelperRequest(query) {
+    const value = String(query || '').trim();
+    if (!value) throw new Error('问题不能为空');
+    return buildAiRequest('english_helper', { query: value });
   }
 
   function buildArticleTranslationRequest(title, paragraphs) {
@@ -300,6 +306,18 @@
       chineseReading: String(result?.chineseReading || '').trim(),
       forms: clicked && wordKey(clicked) !== wordKey(front) ? [clicked] : [],
     };
+  }
+
+  function mergeMeanings(current, addition) {
+    const parts = `${String(current || '')}\n${String(addition || '')}`
+      .split(/[,，;；\r\n]+/).map((item) => item.trim()).filter(Boolean);
+    const seen = new Set();
+    return parts.filter((item) => {
+      const key = item.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).join('；');
   }
 
   // Focus words for Today Article. Three by default, four at most. The running
@@ -376,7 +394,7 @@
     latestSentenceTargetWords, latestSentencePrimaryTarget,
     sentencePracticeSelection, selectArticleFocusWords, isTechnicalTarget,
     knownWordSample, buildAiContext, buildAiRequest, buildArticleTranslationRequest, lookupCacheKey,
-    buildLookupWordRequest, wordDraftFromLookup,
+    buildLookupWordRequest, buildEnglishHelperRequest, wordDraftFromLookup, mergeMeanings,
   };
   global.FlashAiLearning = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

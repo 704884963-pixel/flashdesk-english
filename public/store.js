@@ -15,6 +15,10 @@
 
   window.FlashStore = {
     load: () => api('/api/cards'), // -> {cards, history, meta?}; legacy Word defaults are read-only
+    exportSnapshot: () => api('/api/backup/learning'),
+    replaceSnapshot: (snapshot) => api('/api/backup/learning', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(snapshot),
+    }),
     addCard: (fields) => postJSON('/api/cards', fields), // -> {card}
     importBatch: (items) => postJSON('/api/cards/batch', { items }), // -> atomic batch result
     updateCard: (id, { front, back, memoryReading, chineseReading, forms }) => api(`/api/cards/${encodeURIComponent(id)}`, {

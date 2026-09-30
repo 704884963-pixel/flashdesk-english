@@ -32,7 +32,9 @@ const state = {
     lookupCache: new Map(), requestTiming: null,
     narrationId: 0, narrationRate: null, narrationSpeed: 1,
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
+    helperQuery: '', helperAnswer: '', helperLoading: false, helperError: '',
   },
+  backup: { pending: null, restoring: false },
 };
 
 function freshSession() {
@@ -2075,7 +2077,7 @@ function aiServiceStatusHtml(service = state.ai.service) {
   const connection = service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接';
   const timing = state.ai.requestTiming;
   if (!timing) return connection;
-  const taskLabel = { generate_sentences: '今日长句', generate_article: '今日短文', translate_article: '短文翻译', lookup_word: '单词查询' }[timing.task] || timing.task;
+  const taskLabel = { generate_sentences: '今日长句', generate_article: '今日短文', translate_article: '短文翻译', lookup_word: '单词查询', english_helper: '英语助手' }[timing.task] || timing.task;
   const wordCounts = timing.initialWordCount == null || timing.finalWordCount == null
     ? ''
     : `<br>首次词数：${timing.initialWordCount}<br>最终词数：${timing.finalWordCount}`;
@@ -2108,7 +2110,50 @@ function renderAiHome() {
     <div class="ai-home-actions">
       <button type="button" class="panel ai-entry" data-ai-mode="sentences"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></button>
       <button type="button" class="panel ai-entry" data-ai-mode="article"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></button>
+      <button type="button" class="panel ai-entry" data-ai-mode="helper"><strong>AI 英语助手</strong><span>查单词、近义词、词义区别和简单例句</span></button>
     </div>${aiSettingsHtml()}</div>`;
+}
+
+function helperAnswerHtml(answer) {
+  const lines = String(answer || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  const items = lines.filter((line) => /^[-•]\s+/.test(line));
+  if (items.length === lines.length) return `<ul>${items.map((line) => `<li>${esc(line.replace(/^[-•]\s+/, ''))}</li>`).join('')}</ul>`;
+  return lines.map((line) => `<p>${esc(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</p>`).join('');
+}
+
+function renderAiHelper() {
+  $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><button class="article-back" type="button" data-ai-home>← 返回</button>
+    <header class="ai-head"><h2>AI 英语助手</h2><p>一次问一个英语问题，回答不会写入学习数据。</p></header>
+    <section class="panel ai-helper-panel">
+      <label class="field"><span class="micro-label">你的问题</span><textarea id="ai-helper-query" rows="4" placeholder="例如：customer 和 client 有什么区别？">${esc(state.ai.helperQuery)}</textarea></label>
+      <div class="ai-helper-quick" aria-label="快捷问题">
+        <button type="button" class="btn" data-ai-helper-template="请解释单词 ___ 的常见意思和简单例句">查单词</button>
+        <button type="button" class="btn" data-ai-helper-template="请给出 ___ 的常见近义词和区别">近义词</button>
+        <button type="button" class="btn" data-ai-helper-template="请比较 ___ 和 ___ 的区别">词义区别</button>
+        <button type="button" class="btn" data-ai-helper-template="请给 ___ 一个适合 CET-4 以下水平的简单例句">简单例句</button>
+      </div>
+      <div class="form-actions"><button type="button" class="btn btn-primary" data-ai-helper-submit ${state.ai.helperLoading ? 'disabled' : ''}>${state.ai.helperLoading ? '正在查询…' : '询问'}</button></div>
+      ${state.ai.helperError ? `<p class="ai-error">${esc(state.ai.helperError)}</p>` : ''}
+      ${state.ai.helperAnswer ? `<div class="ai-helper-answer" aria-live="polite">${helperAnswerHtml(state.ai.helperAnswer)}</div>` : ''}
+    </section>${aiSettingsHtml()}</div>`;
+}
+
+async function askEnglishHelper() {
+  if (state.ai.helperLoading) return;
+  const query = String($('#ai-helper-query')?.value || '').trim();
+  if (!query) { state.ai.helperError = '请输入问题。'; renderAiHelper(); return; }
+  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = '';
+  renderAiHelper();
+  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  try {
+    const request = FlashAiLearning.buildEnglishHelperRequest(query);
+    const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    state.ai.helperAnswer = response.data.answer;
+    state.ai.service = { provider: response.provider, model: response.model };
+    rememberAiTiming('english_helper', response, started);
+  } catch { state.ai.helperError = 'AI 暂时无法回答，请稍后再试。'; }
+  finally { state.ai.helperLoading = false; renderAiHelper(); }
 }
 
 function renderAiSentences() {
@@ -2152,6 +2197,7 @@ function renderAiArticle() {
 function renderAiView() {
   if (state.ai.mode === 'sentences') renderAiSentences();
   else if (state.ai.mode === 'article') renderAiArticle();
+  else if (state.ai.mode === 'helper') renderAiHelper();
   else renderAiHome();
 }
 
@@ -2549,20 +2595,32 @@ function aiLookupExistingCard(word, result) {
     || lookup.get(FlashArticleUtils.wordKey(word)) || null;
 }
 
-function openAiSentenceWord(word, sentence, { error = '', editing = false, loading = false } = {}) {
+function openAiSentenceWord(word, sentence, { error = '', editing = false, loading = false, meaningEditing = false } = {}) {
   const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
   const result = state.ai.lookupCache.get(cacheKey) || null;
   const card = aiLookupExistingCard(word, result);
   const details = card ? wordDetails(card) : null;
+  const memoryReading = card ? details.memoryReading || result?.memoryReading || '' : '';
+  const chineseReading = card ? details.chineseReading || result?.chineseReading || '' : '';
+  const mergedMeaning = card && result ? FlashAiLearning.mergeMeanings(card.back, result.meaningInContextZh) : '';
+  const canSupplement = card && result?.meaningInContextZh && mergedMeaning !== FlashAiLearning.mergeMeanings(card.back, '');
   const draft = result && !card && editing ? FlashAiLearning.wordDraftFromLookup(word, result) : null;
   const detail = (label, value) => value
     ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   $('#article-action-content').innerHTML = `<div class="article-sheet">
     <div class="micro-label">当前单词</div><h3>${esc(word)}</h3>
     ${card ? `<p class="article-learned-label">已在单词库：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
-      ${detail('中文意思', card.back)}
-      ${detail('🧠 发音拆解', details.memoryReading)}
-      ${detail('🗣 中文近似', details.chineseReading)}`
+      ${detail('词库释义', card.back)}
+      ${detail('🧠 发音拆解', memoryReading)}
+      ${detail('🗣 中文近似', chineseReading)}
+      ${result ? detail('本句含义', result.meaningInContextZh)
+        : loading ? '<div class="word-detail"><span class="micro-label">本句含义</span><div class="muted">正在分析…</div></div>'
+        : error ? '<div class="word-detail"><span class="micro-label">本句含义</span><div class="muted">本句含义暂时无法获取</div></div>' : ''}
+      ${meaningEditing ? `<form id="ai-meaning-form" class="ai-word-inline-form" data-ai-card-id="${esc(card.id)}" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">
+          <label class="field"><span class="micro-label">最终释义（可编辑）</span><textarea id="ai-meaning-back" rows="3" required>${esc(mergedMeaning)}</textarea></label>
+          <p class="ai-error" id="ai-meaning-error" hidden></p>
+          <div class="form-actions"><button type="button" class="btn" data-ai-cancel-meaning>取消</button><button type="submit" class="btn btn-primary" id="ai-meaning-save">确认保存</button></div>
+        </form>` : ''}`
       : loading ? '<p class="muted ai-word-loading">正在查询…</p>'
       : error ? `<p class="ai-error">查询失败：${esc(error)}</p>`
       : result && editing ? `${detail('本句中', result.meaningInContextZh)}
@@ -2583,6 +2641,7 @@ function openAiSentenceWord(word, sentence, { error = '', editing = false, loadi
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
       <button type="button" class="btn" data-ai-pronounce="${esc(word)}">AI发音</button>
+      ${canSupplement && !meaningEditing ? `<button type="button" class="btn" data-ai-merge-meaning="${esc(word)}" data-ai-sentence="${esc(sentence)}">＋补充到词库释义</button>` : ''}
       ${card || loading || editing ? ''
         : error ? `<button type="button" class="btn" data-ai-retry-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">重试</button>`
         : result ? `<button type="button" class="btn btn-primary" data-ai-edit-word="${esc(word)}" data-ai-sentence="${esc(sentence)}">加入单词库</button>` : ''}
@@ -2610,7 +2669,6 @@ async function lookupAiSentenceWord(word, sentence) {
 }
 
 async function showAiSentenceWord(word, sentence) {
-  if (aiLookupExistingCard(word, null)) return openAiSentenceWord(word, sentence);
   await lookupAiSentenceWord(word, sentence);
 }
 
@@ -2665,6 +2723,34 @@ async function saveInlineAiWord(form) {
   }
 }
 
+async function saveAiMeaningSupplement(form) {
+  const id = form.dataset.aiCardId;
+  const word = form.dataset.aiWord;
+  const sentence = form.dataset.aiSentence;
+  const card = state.cards.find((item) => item.id === id);
+  if (!card) return;
+  const save = form.querySelector('#ai-meaning-save');
+  const error = form.querySelector('#ai-meaning-error');
+  const back = form.querySelector('#ai-meaning-back').value.trim();
+  if (!back) { error.hidden = false; error.textContent = '释义不能为空'; return; }
+  save.disabled = true;
+  try {
+    const details = wordDetails(card);
+    const { card: updated } = await FlashStore.updateCard(card.id, {
+      front: card.front, back,
+      memoryReading: details.memoryReading, chineseReading: details.chineseReading, forms: details.forms,
+    });
+    const index = state.cards.findIndex((item) => item.id === updated.id);
+    if (index !== -1) state.cards[index] = updated;
+    state.article.cache.clear();
+    refreshAiSentenceWordLookup();
+    openAiSentenceWord(word, sentence);
+    toast('词库释义已更新');
+  } catch (err) {
+    error.hidden = false; error.textContent = `保存失败：${err.message}`; save.disabled = false;
+  }
+}
+
 async function setArticleUnknown(word, unknown) {
   try {
     const words = await ArticleStore.setUnknownWord(word, unknown);
@@ -2713,9 +2799,69 @@ function prefillArticleCard(deck, front, back = '', wordDraft = {}) {
   $('#add-back').focus();
 }
 
+/* ---------- full backup ---------- */
+
+function setAiHistorySnapshot(snapshot) {
+  const normalized = FlashBackup.normalizeAiLearning(snapshot);
+  localStorage.setItem(AI_HISTORY_KEY, JSON.stringify(normalized));
+  aiHistory = FlashAiLearning.normalizeRecentGenerations(normalized);
+}
+
+async function collectFullBackup() {
+  const [learning, articles] = await Promise.all([
+    FlashStore.exportSnapshot(), ArticleStore.exportSnapshot(),
+  ]);
+  return FlashBackup.create({ learning, articles, aiLearning: FlashBackup.normalizeAiLearning(aiHistory) });
+}
+
+function backupSummaryHtml(summary) {
+  return `<div><dt>导出时间</dt><dd>${esc(new Date(summary.exportedAt).toLocaleString('zh-CN'))}</dd></div>
+    <div><dt>单词</dt><dd>${summary.words} 个</dd></div>
+    <div><dt>文章</dt><dd>${summary.articles} 篇</dd></div>
+    <div><dt>Review 记录</dt><dd>${summary.history} 条</dd></div>`;
+}
+
+async function exportFullBackup() {
+  const backup = await collectFullBackup();
+  const summary = FlashBackup.summary(backup);
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `flashdesk-backup-${backup.exportedAt.slice(0, 10)}.json`;
+  document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  $('#backup-status').textContent = `已导出：${summary.words} 个单词、${summary.articles} 篇文章、${summary.history} 条 Review 记录。`;
+}
+
+async function restoreFullBackup(backup) {
+  const current = await collectFullBackup();
+  const previousAiRaw = localStorage.getItem(AI_HISTORY_KEY);
+  try {
+    await FlashStore.replaceSnapshot(backup.learning);
+    await ArticleStore.replaceSnapshot(backup.articles);
+    setAiHistorySnapshot(backup.aiLearning);
+  } catch (error) {
+    const rollbackErrors = [];
+    try { await FlashStore.replaceSnapshot(current.learning); } catch (err) { rollbackErrors.push(err); }
+    try { await ArticleStore.replaceSnapshot(current.articles); } catch (err) { rollbackErrors.push(err); }
+    try {
+      if (previousAiRaw === null) localStorage.removeItem(AI_HISTORY_KEY);
+      else localStorage.setItem(AI_HISTORY_KEY, previousAiRaw);
+      aiHistory = loadAiHistory();
+    } catch (err) { rollbackErrors.push(err); }
+    if (rollbackErrors.length) throw new Error(`恢复失败，自动回滚未完全成功：${error.message}`);
+    throw new Error(`恢复失败，当前数据已回滚：${error.message}`);
+  }
+}
+
+function renderBackupView() {
+  $('#backup-confirm').hidden = !state.backup.pending;
+  if (state.backup.pending) $('#backup-summary').innerHTML = backupSummaryHtml(FlashBackup.summary(state.backup.pending));
+}
+
 /* ---------- views ---------- */
 
-const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse']);
+const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse', 'backup']);
 
 function setMoreMenuOpen(open) {
   const toggle = $('#nav-more-toggle');
@@ -2748,7 +2894,7 @@ function switchView(name) {
   setMoreMenuOpen(false);
   document.body.classList.toggle('reading-view', name === 'reading');
   updateNavigationState(name);
-  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'backup']) $(`#view-${v}`).hidden = v !== name;
   if (name === 'review') {
     state.session = freshSession();
     buildQueue();
@@ -2758,13 +2904,14 @@ function switchView(name) {
     renderQuiz();
   } else if (name === 'browse') {
     renderBrowse();
-    if (FlashStore.exportData) $('#data-panel').hidden = false;
   } else if (name === 'words') {
     renderWordLibrary();
   } else if (name === 'reading') {
     renderArticleView();
   } else if (name === 'ai') {
     renderAiView();
+  } else if (name === 'backup') {
+    renderBackupView();
   } else if (name === 'add') {
     updateAddForm();
     setAddMode(state.addMode);
@@ -2795,6 +2942,46 @@ function bindEvents() {
     if (e.key !== 'Escape') return;
     setMoreMenuOpen(false);
     $('#nav-more-toggle').focus();
+  });
+
+  $('#backup-export').addEventListener('click', async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true; $('#backup-status').textContent = '正在准备完整备份…';
+    try { await exportFullBackup(); }
+    catch (err) { $('#backup-status').textContent = `导出失败：${err.message}`; }
+    finally { button.disabled = false; }
+  });
+
+  $('#backup-file').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    state.backup.pending = null; renderBackupView();
+    if (!file) return;
+    try {
+      state.backup.pending = FlashBackup.parse(await file.text());
+      $('#backup-status').textContent = '备份校验通过，请确认恢复摘要。';
+      renderBackupView();
+    } catch (err) {
+      $('#backup-status').textContent = `无法恢复：${err.message}`;
+    } finally { e.target.value = ''; }
+  });
+
+  $('#backup-cancel').addEventListener('click', () => {
+    state.backup.pending = null; $('#backup-status').textContent = '已取消，当前数据没有变化。'; renderBackupView();
+  });
+
+  $('#backup-restore').addEventListener('click', async (e) => {
+    if (!state.backup.pending || state.backup.restoring) return;
+    state.backup.restoring = true; e.currentTarget.disabled = true; $('#backup-cancel').disabled = true;
+    $('#backup-status').textContent = '正在恢复并校验各数据存储…';
+    try {
+      const summary = FlashBackup.summary(state.backup.pending);
+      await restoreFullBackup(state.backup.pending);
+      $('#backup-status').textContent = `恢复成功：${summary.words} 个单词、${summary.articles} 篇文章、${summary.due} 张待复习。正在刷新…`;
+      setTimeout(() => location.reload(), 700);
+    } catch (err) {
+      $('#backup-status').textContent = err.message;
+      e.currentTarget.disabled = false; $('#backup-cancel').disabled = false; state.backup.restoring = false;
+    }
   });
 
   ['#deck-filter', '#browse-deck-filter'].forEach((selector) => {
@@ -3074,6 +3261,11 @@ function bindEvents() {
       await lookupAiSentenceWord(button.dataset.aiRetryWord, button.dataset.aiSentence);
     } else if (button.dataset.aiEditWord !== undefined) {
       openAiSentenceWord(button.dataset.aiEditWord, button.dataset.aiSentence, { editing: true });
+    } else if (button.dataset.aiMergeMeaning !== undefined) {
+      openAiSentenceWord(button.dataset.aiMergeMeaning, button.dataset.aiSentence, { meaningEditing: true });
+    } else if (button.hasAttribute('data-ai-cancel-meaning')) {
+      const form = button.closest('#ai-meaning-form');
+      if (form) openAiSentenceWord(form.dataset.aiWord, form.dataset.aiSentence);
     } else if (button.dataset.articleUnknown !== undefined) {
       await setArticleUnknown(button.dataset.articleUnknown, true);
     } else if (button.dataset.articleKnown !== undefined) {
@@ -3085,10 +3277,12 @@ function bindEvents() {
     }
   });
   $('#article-action-content').addEventListener('submit', async (e) => {
-    const form = e.target.closest('#ai-word-inline-form');
-    if (!form) return;
+    const wordForm = e.target.closest('#ai-word-inline-form');
+    const meaningForm = e.target.closest('#ai-meaning-form');
+    if (!wordForm && !meaningForm) return;
     e.preventDefault();
-    await saveInlineAiWord(form);
+    if (wordForm) await saveInlineAiWord(wordForm);
+    else await saveAiMeaningSupplement(meaningForm);
   });
 
   $('#ai-root').addEventListener('change', (e) => {
@@ -3117,6 +3311,12 @@ function bindEvents() {
     if (button.dataset.aiMode) {
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
       state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
+    } else if (button.dataset.aiHelperTemplate !== undefined) {
+      state.ai.helperQuery = button.dataset.aiHelperTemplate;
+      renderAiHelper();
+      $('#ai-helper-query').focus();
+    } else if (button.hasAttribute('data-ai-helper-submit')) {
+      await askEnglishHelper();
     } else if (button.hasAttribute('data-ai-home')) {
       stopAiArticleNarration(false);
       state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; renderAiHome();

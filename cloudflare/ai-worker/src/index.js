@@ -3,6 +3,7 @@ import { sentenceMessages } from './prompts/sentences.js';
 import { articleMessages } from './prompts/article.js';
 import { lookupWordMessages } from './prompts/lookup-word.js';
 import { translateArticleMessages } from './prompts/translate-article.js';
+import { englishHelperMessages } from './prompts/english-helper.js';
 import { englishWordCount, parseAiOutput, validateClientRequest } from './validation.js';
 import { createPronunciationProvider, validatePronunciationRequest } from './pronunciation.js';
 
@@ -20,10 +21,10 @@ const failure = (code, message, status, origin, env) => reply({ ok: false, error
 const authorized = (request, env) => request.headers.get('Authorization') === `Bearer ${env.FLASHDESK_AI_TOKEN}`;
 
 export function generationOptions(task, env) {
-  if (task === 'lookup_word') {
+  if (task === 'lookup_word' || task === 'english_helper') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
-      maxOutputTokens: 240,
+      maxOutputTokens: task === 'lookup_word' ? 240 : 520,
       temperature: 0.1,
       reasoning: false,
       timeoutMs: 15000,
@@ -90,7 +91,8 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
   const messages = input.task === 'generate_sentences'
     ? sentenceMessages(input.context)
     : input.task === 'generate_article' ? articleMessages(input.context)
-      : input.task === 'translate_article' ? translateArticleMessages(input.context) : lookupWordMessages(input.context);
+      : input.task === 'translate_article' ? translateArticleMessages(input.context)
+        : input.task === 'english_helper' ? englishHelperMessages(input.context) : lookupWordMessages(input.context);
   let provider;
   try { provider = createProvider(env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env); }
   try {
@@ -130,6 +132,21 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       return failure('INVALID_AI_OUTPUT', input.task === 'translate_article'
         ? '参考翻译段落未能正确对齐，请重试。'
         : 'AI 输出格式错误', 502, origin, env);
+    }
+    if (input.task === 'lookup_word' && (!data.memoryReading || !data.chineseReading)) {
+      const incomplete = data;
+      const correctionMessages = [...messages,
+        { role: 'assistant', content: generated.content },
+        { role: 'user', content: 'The pronunciation learning drafts are incomplete. Return the same strict JSON schema once more. Preserve the meanings and base form. For an ordinary lexical English word, provide a short practical memoryReading sound breakdown and a short chineseReading approximation draft. These are editable aids, not standard pronunciation. If a responsible draft truly cannot be given, an empty string is allowed. Return JSON only.' },
+      ];
+      try {
+        const corrected = await generate(correctionMessages);
+        const correctedData = parseAiOutput(input.task, corrected.content, input.context);
+        generated = corrected;
+        data = correctedData;
+      } catch {
+        data = incomplete;
+      }
     }
     if (input.task === 'generate_sentences') {
       initialWordCount = englishWordCount(data.sentences[0].english);

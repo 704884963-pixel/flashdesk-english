@@ -118,7 +118,26 @@
       return clone(unknownWords);
     }
 
-    return { list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord };
+    async function exportSnapshot() {
+      return { articles: await list(), unknownWords: await getUnknownWords() };
+    }
+
+    async function replaceSnapshot(snapshot) {
+      if (!snapshot || !Array.isArray(snapshot.articles) || !Array.isArray(snapshot.unknownWords)) {
+        throw new Error('阅读数据格式无效');
+      }
+      const db = await open();
+      const transaction = db.transaction([STORE, PROFILE_STORE], 'readwrite');
+      const articles = transaction.objectStore(STORE);
+      const profile = transaction.objectStore(PROFILE_STORE);
+      articles.clear();
+      snapshot.articles.forEach((article) => articles.put(clone(article)));
+      profile.put({ id: PROFILE_ID, unknownWords: utils.normalizeUnknownWords(snapshot.unknownWords) });
+      await transactionDone(transaction);
+      return exportSnapshot();
+    }
+
+    return { list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord, exportSnapshot, replaceSnapshot };
   }
 
   global.createArticleStore = createArticleStore;

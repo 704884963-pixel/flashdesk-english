@@ -118,6 +118,19 @@ test('PWA full export/import preserves schema, Word details, progress, history a
   assert.equal(restoredAdded.chineseReading, '波特额波');
 });
 
+test('PWA backup snapshot replacement preserves exact formal learning state', async () => {
+  const h = harness(); await h.store.load();
+  const replacement = {
+    schemaVersion: 2,
+    cards: [{ id: 'restored', deck: 'Words', wordNumber: 9, front: 'restore', back: '恢复', forms: [], memoryReading: '', chineseReading: '', due: 9, streak: 2, reviewStep: 1, lapses: 1, created: 1 }],
+    history: [{ date: '2026-09-30', deck: 'Words', reviewed: 1, correct: 1 }],
+    meta: { nextWordNumber: 10 },
+  };
+  await h.store.replaceSnapshot(replacement);
+  assert.deepEqual(plain(await h.store.exportSnapshot()), replacement);
+  assert.deepEqual(h.read(), replacement);
+});
+
 test('default-data exactly covers authority #1-#137 with unique English', () => {
   const first = JSON.parse(source('import/english-words-1-131.json')).cards;
   const last = source('import/英语词汇总表_132-137.md')

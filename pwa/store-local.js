@@ -170,6 +170,21 @@
       });
     },
 
+    async exportSnapshot() {
+      await ensureReady();
+      return clone(data);
+    },
+
+    async replaceSnapshot(snapshot) {
+      await ensureReady();
+      if (!validData(snapshot)) throw new Error('学习数据格式无效');
+      const previous = data;
+      data = clone(snapshot);
+      try { persist(); }
+      catch (err) { data = previous; throw err; }
+      return this.load();
+    },
+
     async addCard(fields) {
       await ensureReady();
       const previous = data;

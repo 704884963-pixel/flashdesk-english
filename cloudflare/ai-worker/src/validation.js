@@ -1,4 +1,4 @@
-export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word']);
+export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper']);
 
 export function stripJsonFence(value) {
   const text = String(value || '').trim();
@@ -29,6 +29,10 @@ export function validateAiData(task, data, context = {}) {
     const fields = ['word', 'baseForm', 'meaningZh', 'meaningInContextZh', 'memoryReading', 'chineseReading'];
     if (fields.some((field) => typeof data[field] !== 'string') || !nonempty(data.word) || !nonempty(data.meaningZh)) throw new Error('invalid word lookup');
     return Object.fromEntries(fields.map((field) => [field, data[field].trim()]));
+  }
+  if (task === 'english_helper') {
+    if (!nonempty(data.answer)) throw new Error('invalid helper answer');
+    return { answer: data.answer.trim() };
   }
   if (task === 'generate_sentences') {
     if (!Array.isArray(data.sentences) || data.sentences.length !== 1) throw new Error('invalid sentences');
@@ -84,6 +88,10 @@ export function validateClientRequest(body) {
   if (body.task === 'lookup_word') {
     if (!nonempty(body.context.word) || !nonempty(body.context.sentence)) throw new Error('invalid lookup context');
     return { task: body.task, context: { word: body.context.word.trim(), sentence: body.context.sentence.trim() }, options: {} };
+  }
+  if (body.task === 'english_helper') {
+    if (!nonempty(body.context.query)) throw new Error('invalid helper query');
+    return { task: body.task, context: { query: body.context.query.trim() }, options: {} };
   }
   if (body.task === 'translate_article') {
     if (!nonempty(body.context.title) || !words(body.context.paragraphs) || !body.context.paragraphs.length) throw new Error('invalid article translation context');
