@@ -26,20 +26,20 @@ test('low-frequency views no longer stay in the primary navigation row', () => {
   }
 });
 
-test('More menu keeps Reading first, utility views together, then Data Backup', () => {
-  assert.deepEqual([...menu.matchAll(/data-view="([^"]+)"/g)].map((match) => match[1]), ['reading', 'add', 'quiz', 'browse', 'backup']);
-  assert.match(menu, /data-view="reading"[\s\S]*role="separator"[\s\S]*data-view="add"[\s\S]*data-view="browse"[\s\S]*role="separator"[\s\S]*data-view="backup"/);
+test('More menu keeps Reading first, utility views together, then statistics and Data Backup', () => {
+  assert.deepEqual([...menu.matchAll(/data-view="([^"]+)"/g)].map((match) => match[1]), ['reading', 'add', 'quiz', 'browse', 'usage', 'backup']);
+  assert.match(menu, /data-view="reading"[\s\S]*role="separator"[\s\S]*data-view="add"[\s\S]*data-view="browse"[\s\S]*role="separator"[\s\S]*data-view="usage"[\s\S]*data-view="backup"/);
 });
 
 test('More toggle and menu use accessible button semantics', () => {
   assert.match(nav, /type="button"[^>]*id="nav-more-toggle"[\s\S]*aria-haspopup="menu"[\s\S]*aria-expanded="false"/);
   assert.match(menu, /role="menu"[^>]*hidden/);
-  assert.equal((menu.match(/role="menuitem"/g) || []).length, 5);
+  assert.equal((menu.match(/role="menuitem"/g) || []).length, 6);
 });
 
 test('view switching closes More and updates primary or More active state', () => {
   const section = app.slice(app.indexOf('const MORE_VIEWS'), app.indexOf('/* ---------- events'));
-  assert.match(section, /MORE_VIEWS = new Set\(\['reading', 'add', 'quiz', 'browse', 'backup'\]\)/);
+  assert.match(section, /MORE_VIEWS = new Set\(\['reading', 'add', 'quiz', 'browse', 'usage', 'backup'\]\)/);
   assert.match(section, /setMoreMenuOpen\(false\)/);
   assert.match(section, /more\.classList\.toggle\('btn-active', MORE_VIEWS\.has\(name\)\)/);
   assert.match(section, /aria-current/);
@@ -60,10 +60,10 @@ test('deck controls live inside Review and Browse instead of the global navigati
   assert.match(app, /\['#deck-filter', '#browse-deck-filter'\]/);
 });
 
-test('all eight views remain reachable through tab buttons', () => {
+test('all nine views remain reachable through tab buttons', () => {
   assert.deepEqual(new Set([...nav.matchAll(/data-view="([^"]+)"/g)].map((match) => match[1])),
-    new Set(['review', 'words', 'ai', 'reading', 'add', 'quiz', 'browse', 'backup']));
-  assert.match(app, /\['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'backup'\]/);
+    new Set(['review', 'words', 'ai', 'reading', 'add', 'quiz', 'browse', 'usage', 'backup']));
+  assert.match(app, /\['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'usage', 'backup'\]/);
 });
 
 test('Review grade actions keep Again, Remember and Easy order and handlers', () => {

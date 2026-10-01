@@ -37,6 +37,27 @@ const state = {
   backup: { pending: null, restoring: false },
 };
 
+function usageAreaForView(view) {
+  return ({ review: 'review', words: 'words', ai: 'aiLearning', reading: 'reading' })[view] || 'other';
+}
+
+const usageTracker = typeof FlashUsageTracker !== 'undefined'
+  ? FlashUsageTracker.createTracker({
+    storage: localStorage,
+    document,
+    window,
+    getArea: () => usageAreaForView(state.view),
+  })
+  : {
+    start() {}, setArea() {}, exportStats: () => ({ version: 1, days: {} }), replaceStats() {},
+    getTodayStats: () => ({ activeSeconds: 0, sessionCount: 0, areas: { review: 0, words: 0, aiLearning: 0, reading: 0, other: 0 } }),
+    getRecentDaysStats: () => ({ totalSeconds: 0, averageSeconds: 0, validLearningDays: 0 }),
+    getCurrentStreak: () => 0, getDailyGoal: () => 20,
+    setDailyGoal: () => 20,
+    getDailyGoalProgress: () => ({ goalMinutes: 20, activeSeconds: 0, percent: 0 }),
+  };
+if (typeof window !== 'undefined') window.FlashDeskUsage = usageTracker;
+
 function freshSession() {
   return {
     active: false,
@@ -2543,16 +2564,12 @@ async function startArticleParagraphNarration(rate, paragraphIndex) {
   const narrationId = state.article.narrationId;
   state.article.narrationRate = Number(rate) === 0.75 ? 0.75 : 1;
   state.article.narrationParagraphIndex = index;
-  const paragraphs = FlashArticleUtils.articleSpeechParagraphs(article.content);
-  const sentences = paragraphs[index] || [];
+  const paragraphText = FlashArticleUtils.analyzeArticle(article.content).paragraphs[index]?.text.trim() || '';
   refreshArticleParagraphNarrationUi();
   try {
-    for (let sentenceIndex = 0; sentenceIndex < sentences.length; sentenceIndex += 1) {
-      if (narrationId !== state.article.narrationId) return;
-      const result = await playEnglish(sentences[sentenceIndex], { rate: state.article.narrationRate, waitForEnd: true });
-      if (narrationId !== state.article.narrationId || ['cancelled', 'failed'].includes(result)) return;
-      if (sentenceIndex < sentences.length - 1 && !await aiNarrationPause(350, narrationId)) return;
-    }
+    if (!paragraphText || narrationId !== state.article.narrationId) return;
+    const result = await playEnglish(paragraphText, { rate: state.article.narrationRate, waitForEnd: true });
+    if (narrationId !== state.article.narrationId || ['cancelled', 'failed'].includes(result)) return;
   } finally {
     if (narrationId === state.article.narrationId) {
       state.article.narrationRate = null;
@@ -2795,14 +2812,20 @@ async function collectFullBackup() {
   const [learning, articles] = await Promise.all([
     FlashStore.exportSnapshot(), ArticleStore.exportSnapshot(),
   ]);
-  return FlashBackup.create({ learning, articles, aiLearning: FlashBackup.normalizeAiLearning(aiHistory) });
+  return FlashBackup.create({
+    learning,
+    articles,
+    aiLearning: FlashBackup.normalizeAiLearning(aiHistory),
+    usageStats: usageTracker.exportStats(),
+  });
 }
 
 function backupSummaryHtml(summary) {
   return `<div><dt>导出时间</dt><dd>${esc(new Date(summary.exportedAt).toLocaleString('zh-CN'))}</dd></div>
     <div><dt>单词</dt><dd>${summary.words} 个</dd></div>
     <div><dt>文章</dt><dd>${summary.articles} 篇</dd></div>
-    <div><dt>Review 记录</dt><dd>${summary.history} 条</dd></div>`;
+    <div><dt>Review 记录</dt><dd>${summary.history} 条</dd></div>
+    <div><dt>学习统计</dt><dd>已包含</dd></div>`;
 }
 
 async function exportFullBackup() {
@@ -2824,6 +2847,7 @@ async function restoreFullBackup(backup) {
     await FlashStore.replaceSnapshot(backup.learning);
     await ArticleStore.replaceSnapshot(backup.articles);
     setAiHistorySnapshot(backup.aiLearning);
+    usageTracker.replaceStats(backup.usageStats);
   } catch (error) {
     const rollbackErrors = [];
     try { await FlashStore.replaceSnapshot(current.learning); } catch (err) { rollbackErrors.push(err); }
@@ -2833,6 +2857,7 @@ async function restoreFullBackup(backup) {
       else localStorage.setItem(AI_HISTORY_KEY, previousAiRaw);
       aiHistory = loadAiHistory();
     } catch (err) { rollbackErrors.push(err); }
+    try { usageTracker.replaceStats(current.usageStats); } catch (err) { rollbackErrors.push(err); }
     if (rollbackErrors.length) throw new Error(`恢复失败，自动回滚未完全成功：${error.message}`);
     throw new Error(`恢复失败，当前数据已回滚：${error.message}`);
   }
@@ -2843,9 +2868,118 @@ function renderBackupView() {
   if (state.backup.pending) $('#backup-summary').innerHTML = backupSummaryHtml(FlashBackup.summary(state.backup.pending));
 }
 
+/* ---------- effective learning usage ---------- */
+
+// Friendly, compact durations. Below a minute we never print raw seconds:
+// 0 shows as "0分钟" and anything 1–59s as "<1分钟", so the page never reads
+// "5100 seconds" and never dangles awkward decimals.
+function usageDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total === 0) return '0分钟';
+  if (total < 60) return '<1分钟';
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours) return minutes ? `${hours}小时${minutes}分钟` : `${hours}小时`;
+  return `${minutes}分钟`;
+}
+
+const USAGE_AREAS = [
+  ['review', '复习'],
+  ['reading', '阅读'],
+  ['aiLearning', 'AI学习'],
+  ['words', '单词库'],
+  ['other', '其他'],
+];
+
+function usageDayLabel(date, todayKey, index, total) {
+  if (index === total - 1) return '今天';
+  if (index === total - 2) return '昨天';
+  const [, month, day] = date.split('-');
+  return `${month}/${day}`;
+}
+
+// Bars are scaled against the largest value on the page so a 5-minute day is
+// still visible next to a 60-minute day; an all-zero page renders flat bars
+// instead of dividing by zero.
+function usageBarWidth(value, max) {
+  if (!max || max <= 0) return 0;
+  return Math.max(2, Math.round((value / max) * 100));
+}
+
+function renderUsageView() {
+  const today = usageTracker.getTodayStats();
+  const week = usageTracker.getRecentDaysStats(7);
+  const month = usageTracker.getRecentDaysStats(30);
+  const goal = usageTracker.getDailyGoalProgress();
+  const streak = usageTracker.getCurrentStreak();
+
+  $('#usage-today-time').textContent = usageDuration(today.activeSeconds);
+  $('#usage-session-count').textContent = `${today.sessionCount} 次`;
+  $('#usage-streak').textContent = `${streak} 天`;
+  $('#usage-goal-progress').textContent = `${usageDuration(goal.activeSeconds)} / ${goal.goalMinutes}分钟`;
+  const done = $('#usage-goal-done');
+  if (done) done.hidden = !goal.complete;
+  const bar = $('#usage-goal-progress-bar');
+  const fill = $('#usage-goal-fill');
+  const percent = Math.round(goal.percent);
+  if (bar) bar.setAttribute('aria-valuenow', String(percent));
+  if (fill) fill.style.width = `${percent}%`;
+
+  // Never let a stale "already done" impression stand: while today is still
+  // short of a valid learning day, say exactly how much is left.
+  const note = $('#usage-streak-note');
+  if (note) {
+    const validDaySeconds = (typeof FlashUsageTracker !== 'undefined' && FlashUsageTracker.VALID_DAY_SECONDS) || 300;
+    const remaining = Math.max(0, validDaySeconds - today.activeSeconds);
+    if (today.activeSeconds < validDaySeconds) {
+      note.hidden = false;
+      note.textContent = `今天还差 ${usageDuration(remaining)} 达到有效学习日`;
+    } else {
+      note.hidden = true;
+      note.textContent = '';
+    }
+  }
+
+  const areaMax = Math.max(0, ...USAGE_AREAS.map(([key]) => today.areas[key] || 0));
+  $('#usage-area-list').innerHTML = USAGE_AREAS
+    .filter(([key]) => key !== 'other' || (today.areas.other || 0) > 0)
+    .map(([key, label]) => {
+      const value = today.areas[key] || 0;
+      return `<div class="usage-area-row">
+        <span class="usage-area-name">${label}</span>
+        <span class="usage-area-bar"><span style="width:${usageBarWidth(value, areaMax)}%"></span></span>
+        <span class="usage-area-value">${usageDuration(value)}</span>
+      </div>`;
+    }).join('');
+
+  const weekMax = Math.max(0, ...week.days.map((day) => day.activeSeconds));
+  $('#usage-week-bars').innerHTML = week.days.map((day, index) => `<div class="usage-day-row">
+      <span class="usage-day-label">${usageDayLabel(day.date, today.date, index, week.days.length)}</span>
+      <span class="usage-day-bar"><span style="width:${usageBarWidth(day.activeSeconds, weekMax)}%"></span></span>
+      <span class="usage-day-value">${usageDuration(day.activeSeconds)}</span>
+    </div>`).join('');
+
+  const periodHtml = (summary, label) => `<div class="usage-period">
+    <span class="usage-period-name">${label}</span>
+    <span>总计 ${usageDuration(summary.totalSeconds)}</span>
+    <span>日均 ${usageDuration(summary.averageSeconds)}</span>
+    <span>有效学习 ${summary.validLearningDays} 天</span>
+  </div>`;
+  $('#usage-week-summary').innerHTML = periodHtml(week, '近 7 天');
+  $('#usage-recent-summary').innerHTML = periodHtml(month, '近 30 天');
+
+  const preset = $('#usage-goal-preset');
+  const custom = $('#usage-goal-custom');
+  if (preset) preset.value = [10, 20, 30, 45, 60].includes(goal.goalMinutes) ? String(goal.goalMinutes) : 'custom';
+  if (custom) {
+    custom.value = String(goal.goalMinutes);
+    custom.hidden = preset?.value !== 'custom';
+  }
+}
+
 /* ---------- views ---------- */
 
-const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse', 'backup']);
+const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse', 'usage', 'backup']);
 
 function setMoreMenuOpen(open) {
   const toggle = $('#nav-more-toggle');
@@ -2878,7 +3012,8 @@ function switchView(name) {
   setMoreMenuOpen(false);
   document.body.classList.toggle('reading-view', name === 'reading');
   updateNavigationState(name);
-  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'backup']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'usage', 'backup']) $(`#view-${v}`).hidden = v !== name;
+  usageTracker.setArea(usageAreaForView(name));
   if (name === 'review') {
     state.session = freshSession();
     buildQueue();
@@ -2896,6 +3031,8 @@ function switchView(name) {
     renderAiView();
   } else if (name === 'backup') {
     renderBackupView();
+  } else if (name === 'usage') {
+    renderUsageView();
   } else if (name === 'add') {
     updateAddForm();
     setAddMode(state.addMode);
@@ -2965,6 +3102,27 @@ function bindEvents() {
     } catch (err) {
       $('#backup-status').textContent = err.message;
       e.currentTarget.disabled = false; $('#backup-cancel').disabled = false; state.backup.restoring = false;
+    }
+  });
+
+  $('#usage-goal-preset').addEventListener('change', (e) => {
+    const custom = e.target.value === 'custom';
+    $('#usage-goal-custom').hidden = !custom;
+    if (!custom) {
+      usageTracker.setDailyGoal(Number(e.target.value));
+      renderUsageView();
+    } else {
+      $('#usage-goal-custom').focus();
+    }
+  });
+
+  $('#usage-goal-save').addEventListener('click', () => {
+    try {
+      usageTracker.setDailyGoal($('#usage-goal-custom').value);
+      $('#usage-goal-status').textContent = '每日目标已保存。';
+      renderUsageView();
+    } catch (error) {
+      $('#usage-goal-status').textContent = error.message;
     }
   });
 
@@ -3561,6 +3719,7 @@ async function init() {
   await refreshAudioCacheStats();
   renderDeckControls();
   switchView('review');
+  usageTracker.start();
 }
 
 init();

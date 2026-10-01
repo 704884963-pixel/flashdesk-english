@@ -612,7 +612,7 @@ test('Reading paragraph count matches the saved Article paragraph count', () => 
   assert.equal((html.match(/class="article-paragraph-row"/g) || []).length, Utils.splitParagraphs(content).length);
 });
 
-test('Reading paragraph narration plays only the selected paragraph sentences at normal rate', async () => {
+test('Reading paragraph narration sends the complete selected paragraph at normal rate', async () => {
   const calls = [];
   const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
   const sandbox = {
@@ -626,26 +626,47 @@ test('Reading paragraph narration plays only the selected paragraph sentences at
   };
   vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(1, 0);`, sandbox);
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.deepEqual(calls.map((c) => c.text), ['Alpha one.', 'Alpha two.']);
-  assert.deepEqual(calls.map((c) => c.rate), [1, 1]);
+  assert.deepEqual(calls, [{ text: 'Alpha one. Alpha two.', rate: 1 }]);
 });
 
-test('Reading slow narration passes the paragraph and the slow rate', async () => {
+test('Reading slow narration sends the same complete paragraph at the slow rate', async () => {
   const calls = [];
   const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
   const sandbox = {
     FlashArticleUtils: Utils,
-    state: { article: { current: { content: 'Alpha one. Alpha two.\n\nBeta one.' }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
+    state: { article: { current: { content: 'It was raining. I took an umbrella. Then I walked home.\n\nBeta one.' }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
     playEnglish: async (text, options) => { calls.push({ text, rate: options.rate }); return 'system'; },
     aiNarrationPause: async () => true,
     stopArticleParagraphNarration: () => {},
     refreshArticleParagraphNarrationUi: () => {},
     stopEnglishPlayback: () => {},
   };
-  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(0.75, 1);`, sandbox);
+  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(0.75, 0);`, sandbox);
   await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.deepEqual(calls.map((c) => c.text), ['Beta one.']);
-  assert.deepEqual(calls.map((c) => c.rate), [0.75]);
+  assert.deepEqual(calls, [{ text: 'It was raining. I took an umbrella. Then I walked home.', rate: 0.75 }]);
+});
+
+test('Reading normal and slow paragraph narration use identical text and differ only by rate', async () => {
+  const calls = [];
+  const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
+  const sandbox = {
+    FlashArticleUtils: Utils,
+    state: { article: { current: { content: 'I like coffee. I drink it every morning.' }, narrationId: 0, narrationRate: null, narrationParagraphIndex: null } },
+    playEnglish: async (text, options) => { calls.push({ text, rate: options.rate }); return 'system'; },
+    stopArticleParagraphNarration: () => {},
+    refreshArticleParagraphNarrationUi: () => {},
+    stopEnglishPlayback: () => {},
+  };
+  vm.runInNewContext(`${startSource}\nstartArticleParagraphNarration(1, 0);`, sandbox);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  sandbox.state.article.narrationParagraphIndex = null;
+  sandbox.state.article.narrationRate = null;
+  vm.runInNewContext('startArticleParagraphNarration(0.75, 0);', sandbox);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls, [
+    { text: 'I like coffee. I drink it every morning.', rate: 1 },
+    { text: 'I like coffee. I drink it every morning.', rate: 0.75 },
+  ]);
 });
 
 test('Reading narration never sends the Chinese translation into TTS', async () => {
@@ -668,8 +689,15 @@ test('Reading narration never sends the Chinese translation into TTS', async () 
 
 test('Reading paragraph narration prefers the existing playEnglish pipeline', () => {
   const startSource = appSource.slice(appSource.indexOf('async function startArticleParagraphNarration'), appSource.indexOf('function openArticleWord'));
-  assert.match(startSource, /playEnglish\(sentences\[sentenceIndex\], \{ rate: state\.article\.narrationRate, waitForEnd: true \}\)/);
+  assert.match(startSource, /playEnglish\(paragraphText, \{ rate: state\.article\.narrationRate, waitForEnd: true \}\)/);
   assert.doesNotMatch(startSource, /speechSynthesis|new Audio\(|AudioContext|fetchTtsAudio/);
+});
+
+test('Reading word lookup keeps only the clicked word containing sentence as context', () => {
+  const handler = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')"));
+  assert.match(handler, /word\.closest\('\[data-sentence-text\]'\)\?\.dataset\.sentenceText/);
+  assert.match(handler, /openArticleWord\(word\.dataset\.articleWord, sentence\)/);
+  assert.doesNotMatch(handler, /openArticleWord\([^\n]*paragraph/);
 });
 
 test('Reading toolbar buttons are handled before word and sentence lookups', () => {

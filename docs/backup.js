@@ -75,6 +75,30 @@
     };
   }
 
+  function normalizeUsageStats(value) {
+    if (value === undefined) return { version: 1, days: {} };
+    if (!object(value) || value.version !== 1 || !object(value.days)) throw new Error('学习统计格式无效');
+    const areas = ['review', 'words', 'aiLearning', 'reading', 'other'];
+    const days = {};
+    for (const [date, source] of Object.entries(value.days)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !object(source)
+          || !Number.isFinite(source.activeSeconds) || source.activeSeconds < 0
+          || !Number.isSafeInteger(source.sessionCount) || source.sessionCount < 0
+          || !object(source.areas)) throw new Error('学习统计日期数据无效');
+      const normalizedAreas = {};
+      let areaTotal = 0;
+      for (const area of areas) {
+        const seconds = source.areas[area] === undefined ? 0 : source.areas[area];
+        if (!Number.isFinite(seconds) || seconds < 0) throw new Error('学习统计模块时间无效');
+        normalizedAreas[area] = seconds;
+        areaTotal += seconds;
+      }
+      if (areaTotal > source.activeSeconds + 0.001) throw new Error('学习统计模块时间超过总时间');
+      days[date] = { activeSeconds: source.activeSeconds, sessionCount: source.sessionCount, areas: normalizedAreas };
+    }
+    return { version: 1, days };
+  }
+
   function validate(value) {
     if (!object(value)) throw new Error('备份 JSON 格式无效');
     if (value.format !== FORMAT) throw new Error('不是 FlashDesk 完整备份');
@@ -87,11 +111,12 @@
       learning: normalizeLearning(value.learning),
       articles: normalizeArticles(value.articles),
       aiLearning: normalizeAiLearning(value.aiLearning),
+      usageStats: normalizeUsageStats(value.usageStats),
     };
   }
 
-  function create({ learning, articles, aiLearning, exportedAt = new Date().toISOString() }) {
-    return validate({ format: FORMAT, version: VERSION, exportedAt, learning, articles, aiLearning });
+  function create({ learning, articles, aiLearning, usageStats, exportedAt = new Date().toISOString() }) {
+    return validate({ format: FORMAT, version: VERSION, exportedAt, learning, articles, aiLearning, usageStats });
   }
 
   function parse(text) {
@@ -114,7 +139,10 @@
     };
   }
 
-  const api = { FORMAT, VERSION, create, parse, validate, summary, normalizeLearning, normalizeArticles, normalizeAiLearning };
+  const api = {
+    FORMAT, VERSION, create, parse, validate, summary,
+    normalizeLearning, normalizeArticles, normalizeAiLearning, normalizeUsageStats,
+  };
   global.FlashBackup = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

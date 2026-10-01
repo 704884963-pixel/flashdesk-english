@@ -30,6 +30,7 @@
             <button type="button" class="tab nav-more-item" data-view="quiz" role="menuitem">检测</button>
             <button type="button" class="tab nav-more-item" data-view="browse" role="menuitem">浏览</button>
             <div class="nav-more-separator" role="separator"></div>
+            <button type="button" class="tab nav-more-item" data-view="usage" role="menuitem">学习统计</button>
             <button type="button" class="tab nav-more-item" data-view="backup" role="menuitem">数据备份</button>
           </div>
         </div>
@@ -208,6 +209,65 @@ back: 智能体接收查询。</pre>
       <div id="ai-root"></div>
     </section>
 
+    <section id="view-usage" hidden>
+      <div class="usage-page">
+        <header class="usage-head">
+          <h2>学习统计</h2>
+          <p>记录你真正投入英语学习的时间。</p>
+        </header>
+
+        <section class="panel usage-hero">
+          <span class="micro-label">今天有效学习</span>
+          <strong class="usage-hero-time" id="usage-today-time">0 分钟</strong>
+          <div class="usage-hero-goal">
+            <span id="usage-goal-progress">0 / 20 分钟</span>
+            <span class="usage-goal-done" id="usage-goal-done" hidden>今日目标已完成</span>
+          </div>
+          <div class="usage-goal-track" role="progressbar" aria-label="今日目标进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="usage-goal-progress-bar">
+            <span class="usage-goal-fill" id="usage-goal-fill"></span>
+          </div>
+          <div class="usage-quick">
+            <div><span class="micro-label">今天学习</span><strong id="usage-session-count">0 次</strong></div>
+            <div><span class="micro-label">连续学习</span><strong id="usage-streak">0 天</strong></div>
+          </div>
+          <p class="usage-streak-note" id="usage-streak-note" hidden></p>
+        </section>
+
+        <section class="panel usage-goal">
+          <h3>每日目标</h3>
+          <div class="usage-goal-controls">
+            <select id="usage-goal-preset" aria-label="每日学习目标">
+              <option value="10">10 分钟</option>
+              <option value="20">20 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="45">45 分钟</option>
+              <option value="60">60 分钟</option>
+              <option value="custom">自定义</option>
+            </select>
+            <input id="usage-goal-custom" type="number" min="1" max="240" inputmode="numeric" aria-label="自定义目标分钟数" hidden>
+            <button type="button" class="btn" id="usage-goal-save">保存目标</button>
+          </div>
+          <p class="muted" id="usage-goal-status" role="status"></p>
+        </section>
+
+        <section class="panel">
+          <h3>今天学了什么</h3>
+          <div id="usage-area-list" class="usage-area-list"></div>
+        </section>
+
+        <section class="panel">
+          <h3>最近 7 天</h3>
+          <div id="usage-week-bars" class="usage-day-bars"></div>
+          <div id="usage-week-summary" class="usage-period-summary"></div>
+        </section>
+
+        <section class="panel">
+          <h3>最近 30 天</h3>
+          <div id="usage-recent-summary" class="usage-period-summary"></div>
+        </section>
+      </div>
+    </section>
+
     <section id="view-backup" hidden>
       <div class="backup-page">
         <header class="backup-head">
@@ -322,6 +382,7 @@ back: 智能体接收查询。</pre>
   <script src="article-utils.js" defer></script>
   <script src="article-store.js" defer></script>
   <script src="ai-learning.js" defer></script>
+  <script src="usage-tracker.js" defer></script>
   <script src="backup.js" defer></script>
   <script src="app.js" defer></script>
 </body>

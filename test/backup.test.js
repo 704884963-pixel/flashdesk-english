@@ -13,6 +13,7 @@ const source = {
   learning: { cards: [card], history: [{ date: '2026-09-30', reviewed: 1 }], meta: { nextWordNumber: 2 } },
   articles: { articles: [article], unknownWords: [' WORD '] },
   aiLearning: { generations: [{ type: 'sentences', targetWords: ['word'], primary: 'word', createdAt: '2026-09-30T00:00:00.000Z' }] },
+  usageStats: { version: 1, days: { '2026-09-30': { activeSeconds: 360, sessionCount: 2, areas: { review: 300, words: 60, aiLearning: 0, reading: 0, other: 0 } } } },
 };
 
 test('full backup has a versioned format and ISO export time', () => {
@@ -38,6 +39,17 @@ test('full backup preserves Articles, translations, progress and unknownWords', 
 test('full backup preserves only persistent AI generation history', () => {
   const result = Backup.create(source);
   assert.deepEqual(result.aiLearning, source.aiLearning);
+});
+test('full backup includes independent effective-learning usage stats', () => {
+  assert.deepEqual(Backup.create(source).usageStats, source.usageStats);
+});
+test('legacy version 1 backup without usageStats restores with empty stats', () => {
+  const current = Backup.create(source); delete current.usageStats;
+  assert.deepEqual(Backup.validate(current).usageStats, { version: 1, days: {} });
+});
+test('backup rejects usage areas that exceed active time', () => {
+  const invalid = structuredClone(source); invalid.usageStats.days['2026-09-30'].areas.words = 100;
+  assert.throws(() => Backup.create(invalid), /超过总时间/);
 });
 test('backup validation rejects invalid JSON, format and version', () => {
   assert.throws(() => Backup.parse('{'), /JSON/);
@@ -69,16 +81,18 @@ test('cancelled restore clears pending data without writing stores', () => {
   const section = app.slice(app.indexOf("$('#backup-cancel').addEventListener"), app.indexOf("$('#backup-restore').addEventListener"));
   assert.match(section, /pending = null/); assert.doesNotMatch(section, /replaceSnapshot/);
 });
-test('confirmed restore replaces all three persistent domains and reloads', () => {
+test('confirmed restore replaces all four persistent domains and reloads', () => {
   const section = app.slice(app.indexOf('async function restoreFullBackup'), app.indexOf('function renderBackupView'));
   assert.match(section, /FlashStore\.replaceSnapshot/); assert.match(section, /ArticleStore\.replaceSnapshot/); assert.match(section, /setAiHistorySnapshot/);
+  assert.match(section, /usageTracker\.replaceStats\(backup\.usageStats\)/);
   assert.match(app, /恢复成功[\s\S]*location\.reload/);
 });
-test('failed cross-store restore attempts rollback of learning, Articles and AI history', () => {
+test('failed cross-store restore attempts rollback of learning, Articles, AI history and usage', () => {
   const section = app.slice(app.indexOf('async function restoreFullBackup'), app.indexOf('function renderBackupView'));
   assert.ok((section.match(/FlashStore\.replaceSnapshot/g) || []).length >= 2);
   assert.ok((section.match(/ArticleStore\.replaceSnapshot/g) || []).length >= 2);
   assert.match(section, /previousAiRaw/);
+  assert.match(section, /usageTracker\.replaceStats\(current\.usageStats\)/);
 });
 test('old Browse-only data panel is no longer exposed as the full backup UI', () => {
   const views = app.slice(app.indexOf('function switchView'), app.indexOf('/* ---------- events'));

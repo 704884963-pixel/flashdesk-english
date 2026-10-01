@@ -13,6 +13,8 @@ const ASSETS = [
   'article-utils.js',
   'article-store.js',
   'ai-learning.js',
+  'usage-tracker.js',
+  'backup.js',
   'logic.js',
   'store.js',
   'default-data.json',
