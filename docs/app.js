@@ -52,6 +52,7 @@ const usageTracker = typeof FlashUsageTracker !== 'undefined'
     start() {}, setArea() {}, exportStats: () => ({ version: 1, days: {} }), replaceStats() {},
     getTodayStats: () => ({ activeSeconds: 0, sessionCount: 0, areas: { review: 0, words: 0, aiLearning: 0, reading: 0, other: 0 } }),
     getRecentDaysStats: () => ({ totalSeconds: 0, averageSeconds: 0, validLearningDays: 0 }),
+    getAllTimeStats: () => ({ totalSeconds: 0, activeDays: 0, calendarDays: 0, averageSecondsPerActiveDay: 0, averageSecondsPerCalendarDay: 0, longestStreak: 0, firstLearningDate: null }),
     getCurrentStreak: () => 0, getDailyGoal: () => 20,
     setDailyGoal: () => 20,
     getDailyGoalProgress: () => ({ goalMinutes: 20, activeSeconds: 0, percent: 0 }),
@@ -2910,6 +2911,7 @@ function renderUsageView() {
   const today = usageTracker.getTodayStats();
   const week = usageTracker.getRecentDaysStats(7);
   const month = usageTracker.getRecentDaysStats(30);
+  const allTime = usageTracker.getAllTimeStats();
   const goal = usageTracker.getDailyGoalProgress();
   const streak = usageTracker.getCurrentStreak();
 
@@ -2967,6 +2969,11 @@ function renderUsageView() {
   </div>`;
   $('#usage-week-summary').innerHTML = periodHtml(week, '近 7 天');
   $('#usage-recent-summary').innerHTML = periodHtml(month, '近 30 天');
+  $('#usage-all-time').innerHTML = `<div><span>总学习</span><strong>${usageDuration(allTime.totalSeconds)}</strong></div>
+    <div><span>有效学习</span><strong>${allTime.activeDays} 天</strong></div>
+    <div><span>最长连续</span><strong>${allTime.longestStreak} 天</strong></div>
+    <div><span>有效学习日日均</span><strong>${usageDuration(allTime.averageSecondsPerActiveDay)}</strong></div>
+    <div><span>开始记录</span><strong>${allTime.firstLearningDate || '—'}</strong></div>`;
 
   const preset = $('#usage-goal-preset');
   const custom = $('#usage-goal-custom');

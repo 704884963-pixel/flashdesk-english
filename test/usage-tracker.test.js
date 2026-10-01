@@ -200,6 +200,115 @@ test('recent stats count valid learning days', () => {
   assert.equal(Usage.recentDaysStats(stats, 30, noon()).validLearningDays, 1);
 });
 
+test('all-time stats are safe when there is no history', () => {
+  assert.deepEqual(Usage.allTimeStats(Usage.emptyStats(), noon()), {
+    totalSeconds: 0, activeDays: 0, calendarDays: 0,
+    averageSecondsPerActiveDay: 0, averageSecondsPerCalendarDay: 0,
+    longestStreak: 0, firstLearningDate: null,
+  });
+});
+
+test('all-time stats summarize one learning day', () => {
+  const stats = { version: 1, days: { '2026-10-01': { activeSeconds: 600 } } };
+  assert.deepEqual(Usage.allTimeStats(stats, noon()), {
+    totalSeconds: 600, activeDays: 1, calendarDays: 1,
+    averageSecondsPerActiveDay: 600, averageSecondsPerCalendarDay: 600,
+    longestStreak: 1, firstLearningDate: '2026-10-01',
+  });
+});
+
+test('all-time totalSeconds includes every recorded historical day', () => {
+  const stats = { version: 1, days: {
+    '2026-09-29': { activeSeconds: 100 }, '2026-09-30': { activeSeconds: 200 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  assert.equal(Usage.allTimeStats(stats, noon()).totalSeconds, 600);
+});
+
+test('299 seconds is not an all-time active day', () => {
+  const stats = { version: 1, days: { '2026-10-01': { activeSeconds: 299 } } };
+  const result = Usage.allTimeStats(stats, noon());
+  assert.equal(result.activeDays, 0); assert.equal(result.longestStreak, 0);
+});
+
+test('300 seconds is an all-time active day', () => {
+  const stats = { version: 1, days: { '2026-10-01': { activeSeconds: 300 } } };
+  const result = Usage.allTimeStats(stats, noon());
+  assert.equal(result.activeDays, 1); assert.equal(result.longestStreak, 1);
+});
+
+test('all-time longestStreak counts consecutive valid learning days', () => {
+  const stats = { version: 1, days: {
+    '2026-09-28': { activeSeconds: 300 }, '2026-09-29': { activeSeconds: 301 },
+    '2026-09-30': { activeSeconds: 900 }, '2026-10-01': { activeSeconds: 10 },
+  } };
+  assert.equal(Usage.allTimeStats(stats, noon()).longestStreak, 3);
+});
+
+test('a missing or short day interrupts the all-time longest streak', () => {
+  const stats = { version: 1, days: {
+    '2026-09-27': { activeSeconds: 300 }, '2026-09-28': { activeSeconds: 300 },
+    '2026-09-29': { activeSeconds: 299 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  assert.equal(Usage.allTimeStats(stats, noon()).longestStreak, 2);
+});
+
+test('firstLearningDate ignores earlier zero-time records', () => {
+  const stats = { version: 1, days: {
+    '2026-09-01': { activeSeconds: 0 }, '2026-09-20': { activeSeconds: 1 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  assert.equal(Usage.allTimeStats(stats, noon()).firstLearningDate, '2026-09-20');
+});
+
+test('all-time average per active day uses total time divided by valid days', () => {
+  const stats = { version: 1, days: {
+    '2026-09-29': { activeSeconds: 300 }, '2026-09-30': { activeSeconds: 150 }, '2026-10-01': { activeSeconds: 450 },
+  } };
+  const result = Usage.allTimeStats(stats, noon());
+  assert.equal(result.activeDays, 2); assert.equal(result.averageSecondsPerActiveDay, 450);
+});
+
+test('all-time calendar average includes missing days since first learning', () => {
+  const stats = { version: 1, days: {
+    '2026-09-29': { activeSeconds: 300 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  const result = Usage.allTimeStats(stats, noon());
+  assert.equal(result.calendarDays, 3); assert.equal(result.averageSecondsPerCalendarDay, 200);
+});
+
+test('all-time consecutive dates work across a month boundary', () => {
+  const stats = { version: 1, days: {
+    '2026-09-30': { activeSeconds: 300 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  assert.equal(Usage.allTimeStats(stats, noon()).longestStreak, 2);
+});
+
+test('all-time consecutive dates and calendar days work across a year boundary', () => {
+  const now = new Date(2027, 0, 1, 12, 0, 0).getTime();
+  const stats = { version: 1, days: {
+    '2026-12-31': { activeSeconds: 300 }, '2027-01-01': { activeSeconds: 600 },
+  } };
+  const result = Usage.allTimeStats(stats, now);
+  assert.equal(result.longestStreak, 2); assert.equal(result.calendarDays, 2);
+});
+
+test('all-time stats are not limited to the most recent thirty days', () => {
+  const stats = { version: 1, days: {
+    '2026-01-01': { activeSeconds: 600 }, '2026-10-01': { activeSeconds: 300 },
+  } };
+  const result = Usage.allTimeStats(stats, noon());
+  assert.equal(result.totalSeconds, 900); assert.equal(result.activeDays, 2);
+  assert.equal(result.firstLearningDate, '2026-01-01');
+});
+
+test('all-time calculations do not mutate or add derived fields to usageStats', () => {
+  const stats = { version: 1, days: { '2026-10-01': { activeSeconds: 300, sessionCount: 1, areas: {} } } };
+  const before = structuredClone(stats);
+  Usage.allTimeStats(stats, noon());
+  assert.deepEqual(stats, before);
+  const h = trackerAt(noon()); h.tracker.replaceStats(stats); h.tracker.getAllTimeStats(noon());
+  assert.deepEqual(Object.keys(h.tracker.exportStats(noon())).sort(), ['days', 'version']);
+});
+
 test('daily goal defaults to twenty minutes', () => {
   const h = trackerAt(noon()); assert.equal(h.tracker.getDailyGoal(), 20);
 });

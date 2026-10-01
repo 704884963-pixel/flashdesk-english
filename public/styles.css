@@ -1194,6 +1194,10 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 .usage-period-name { color: var(--text); font-weight: 650; }
 .usage-period span { color: var(--muted); font-size: .86rem; }
 .usage-period span:first-child { color: var(--text); }
+.usage-all-time { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.usage-all-time > div { min-width: 0; display: grid; gap: 3px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.usage-all-time span { color: var(--muted); font-size: .78rem; }
+.usage-all-time strong { min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-variant-numeric: tabular-nums; }
 .ai-helper-panel { display: grid; gap: 12px; }
 .ai-helper-quick { display: flex; flex-wrap: wrap; gap: 7px; }
 .ai-helper-answer { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); line-height: 1.7; overflow-wrap: anywhere; }
@@ -1209,6 +1213,7 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   .usage-area-row { grid-template-columns: 3.6em minmax(0, 1fr) auto; gap: 8px; }
   .usage-day-row { grid-template-columns: 2.8em minmax(0, 1fr) auto; gap: 8px; }
   .usage-period-summary { grid-template-columns: 1fr; }
+  .usage-all-time { grid-template-columns: 1fr; }
   .ai-helper-quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; padding-bottom: 0; }
   .ai-helper-quick .btn { width: 100%; min-width: 0; }
   .app { padding: 10px 14px 48px; }

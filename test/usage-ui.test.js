@@ -215,6 +215,34 @@ test('thirty day view is three summaries rather than thirty bars', () => {
   assert.equal((write['#usage-recent-summary:html'].match(/class="usage-period"/g) || []).length, 1);
 });
 
+test('the all-time panel displays totals, valid days, longest streak, active-day average and first date', () => {
+  const now = new Date('2026-10-01T21:45:00').getTime();
+  const { write } = usageHarness({ days: sampleDays(now), now });
+  const block = write['#usage-all-time:html'];
+  assert.match(block, /总学习[\s\S]*2小时26分钟/);
+  assert.match(block, /有效学习[\s\S]*6 天/);
+  assert.match(block, /最长连续[\s\S]*3 天/);
+  assert.match(block, /有效学习日日均[\s\S]*24分钟/);
+  assert.match(block, /开始记录[\s\S]*2026-09-25/);
+});
+
+test('the all-time panel handles a completely new learner', () => {
+  const { write } = usageHarness({ days: {}, now: new Date('2026-10-01T12:00:00').getTime() });
+  const block = write['#usage-all-time:html'];
+  assert.match(block, /总学习[\s\S]*0分钟/);
+  assert.match(block, /有效学习[\s\S]*0 天/);
+  assert.match(block, /最长连续[\s\S]*0 天/);
+  assert.match(block, /开始记录[\s\S]*—/);
+});
+
+test('all-time duration remains hours and minutes beyond one hundred hours', () => {
+  const now = new Date('2026-10-01T12:00:00').getTime();
+  const days = { [dayKey(now)]: { activeSeconds: (126 * 60 + 18) * 60, sessionCount: 1, areas: {} } };
+  const { write } = usageHarness({ days, now });
+  assert.match(write['#usage-all-time:html'], /总学习<\/span><strong>126小时18分钟/);
+  assert.doesNotMatch(write['#usage-all-time:html'], /总学习<\/span><strong>\d+天/);
+});
+
 /* ---------- time formatting ---------- */
 
 test('durations use friendly units and never raw seconds', () => {
@@ -285,6 +313,15 @@ test('no usage rule pins a fixed pixel width that would overflow 375px', () => {
   assert.deepEqual(fixed, []);
 });
 
+test('the all-time grid collapses to one min-width-safe column on phones', () => {
+  assert.match(html, /id="usage-all-time" class="usage-all-time"/);
+  const page = css.slice(css.indexOf('.usage-page {'), css.indexOf('.ai-helper-panel'));
+  assert.match(page, /\.usage-all-time \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(page, /\.usage-all-time > div \{[^}]*min-width: 0/);
+  const mobile = css.slice(css.indexOf('@media (max-width: 560px)'));
+  assert.match(mobile, /\.usage-all-time \{ grid-template-columns: 1fr; \}/);
+});
+
 /* ---------- 16. no duplicate timers ---------- */
 
 test('the tracker is created once and started once', () => {
@@ -324,6 +361,14 @@ test('full backup still carries usage stats and the restore summary mentions it'
   assert.match(appSource, /usageTracker\.replaceStats\(backup\.usageStats\)/);
   const summary = appSource.slice(appSource.indexOf('function backupSummaryHtml'), appSource.indexOf('function renderBackupView'));
   assert.match(summary, /学习统计[\s\S]*已包含/);
+});
+
+test('all-time derived totals do not change the backup schema', () => {
+  const backup = source('public/backup.js');
+  for (const field of ['totalSeconds', 'activeDays', 'calendarDays', 'longestStreak', 'firstLearningDate']) {
+    assert.doesNotMatch(backup, new RegExp(field));
+  }
+  assert.match(backup, /return \{ version: 1, days \}/);
 });
 
 /* ---------- core constants untouched ---------- */

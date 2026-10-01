@@ -114,6 +114,52 @@
     };
   }
 
+  function localDateOrdinal(dateKey) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ''));
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const timestamp = Date.UTC(year, month - 1, day);
+    const value = new Date(timestamp);
+    if (value.getUTCFullYear() !== year || value.getUTCMonth() !== month - 1 || value.getUTCDate() !== day) return null;
+    return Math.floor(timestamp / 86400000);
+  }
+
+  function allTimeStats(statsValue, timestamp = Date.now()) {
+    const stats = normalizeStats(statsValue);
+    const todayOrdinal = localDateOrdinal(localDateKey(timestamp));
+    const days = Object.entries(stats.days)
+      .map(([date, value]) => ({ date, ordinal: localDateOrdinal(date), activeSeconds: value.activeSeconds }))
+      .filter((day) => day.ordinal !== null && day.ordinal <= todayOrdinal)
+      .sort((a, b) => a.ordinal - b.ordinal);
+    const totalSeconds = days.reduce((sum, day) => sum + day.activeSeconds, 0);
+    const activeDays = days.filter((day) => day.activeSeconds >= VALID_DAY_SECONDS).length;
+    const first = days.find((day) => day.activeSeconds > 0) || null;
+    const calendarDays = first ? Math.max(1, todayOrdinal - first.ordinal + 1) : 0;
+    let longestStreak = 0;
+    let streak = 0;
+    let previousOrdinal = null;
+    for (const day of days) {
+      if (day.activeSeconds >= VALID_DAY_SECONDS) {
+        streak = previousOrdinal !== null && day.ordinal === previousOrdinal + 1 ? streak + 1 : 1;
+        longestStreak = Math.max(longestStreak, streak);
+      } else {
+        streak = 0;
+      }
+      previousOrdinal = day.ordinal;
+    }
+    return {
+      totalSeconds,
+      activeDays,
+      calendarDays,
+      averageSecondsPerActiveDay: activeDays ? totalSeconds / activeDays : 0,
+      averageSecondsPerCalendarDay: calendarDays ? totalSeconds / calendarDays : 0,
+      longestStreak,
+      firstLearningDate: first?.date || null,
+    };
+  }
+
   function normalizeGoal(value) {
     const minutes = Math.round(Number(value));
     if (!Number.isFinite(minutes) || minutes < 1 || minutes > 240) throw new Error('每日目标须为 1～240 分钟');
@@ -321,6 +367,10 @@
       return currentStreak(snapshot(at), at);
     }
 
+    function getAllTimeStats(at = clock()) {
+      return allTimeStats(snapshot(at), at);
+    }
+
     function getAreaBreakdown(date = localDateKey(clock())) {
       heartbeat(clock());
       return clone(dayFrom(stats, date).areas);
@@ -352,7 +402,7 @@
     return {
       start, stop, heartbeat, recordActivity, setArea, setVisibility, persist,
       exportStats: snapshot, replaceStats, getTodayStats, getRecentDaysStats,
-      getCurrentStreak, getAreaBreakdown, getDailyGoal, setDailyGoal,
+      getCurrentStreak, getAllTimeStats, getAreaBreakdown, getDailyGoal, setDailyGoal,
       getDailyGoalProgress,
       debugState: () => ({ visible, area, lastActivityAt, lastTickAt, sessionActive, dirty }),
     };
@@ -362,7 +412,7 @@
     STORAGE_KEY, GOAL_KEY, VERSION, DEFAULT_GOAL_MINUTES, VALID_DAY_SECONDS,
     IDLE_MS, HEARTBEAT_MS, MAX_TICK_MS, FLUSH_MS, AREAS,
     emptyStats, emptyDay, normalizeStats, normalizeArea, normalizeGoal,
-    localDateKey, currentStreak, recentDaysStats, createTracker,
+    localDateKey, currentStreak, recentDaysStats, allTimeStats, createTracker,
   };
   global.FlashUsageTracker = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
