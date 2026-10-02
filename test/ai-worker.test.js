@@ -318,9 +318,17 @@ test('lookup_word prompt normally requests both editable pronunciation drafts', 
 test('lookup_word prompt sends only word and sentence learning data', async () => { const { lookupWordMessages } = await load('prompts/lookup-word.js'); const message = JSON.parse(lookupWordMessages({ word: 'evaluation', sentence: 'An evaluation helps.', cards: ['secret'], history: ['secret'] })[1].content); assert.deepEqual(message.learningData, { word: 'evaluation', sentence: 'An evaluation helps.' }); });
 test('Worker CORS allows official GitHub Pages origin', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData))); assert.equal(r.headers.get('Access-Control-Allow-Origin'), 'https://704884963-pixel.github.io'); });
 
-test('pronunciation request validation trims text and accepts en-US', async () => {
+test('pronunciation request validation trims text and defaults old clients to asteria', async () => {
   const { validatePronunciationRequest } = await load('pronunciation.js');
-  assert.deepEqual(validatePronunciationRequest({ text: ' improves ', locale: 'en-US' }), { text: 'improves', locale: 'en-US' });
+  assert.deepEqual(validatePronunciationRequest({ text: ' improves ', locale: 'en-US' }), { text: 'improves', locale: 'en-US', speaker: 'asteria' });
+});
+
+test('pronunciation request accepts only the fixed Aura speaker allowlist', async () => {
+  const { validatePronunciationRequest } = await load('pronunciation.js');
+  for (const speaker of ['asteria', 'orion', 'luna']) {
+    assert.equal(validatePronunciationRequest({ text: 'word', locale: 'en-US', speaker }).speaker, speaker);
+  }
+  assert.equal(validatePronunciationRequest({ text: 'word', locale: 'en-US', speaker: 'arbitrary-provider-voice' }).speaker, 'asteria');
 });
 
 test('pronunciation request validation rejects empty, oversized, and unsupported locale values', async () => {
@@ -346,77 +354,72 @@ test('pronunciation endpoint reports unavailable without inventing a provider', 
   assert.equal(modelCalled, false);
 });
 
-test('MeloTTS pronunciation adapter maps en-US to the fixed Cloudflare model and English language', async () => {
-  const { createPronunciationProvider, MELOTTS_MODEL } = await load('pronunciation.js');
+test('Aura-1 pronunciation adapter maps validated input to raw MP3 output', async () => {
+  const { createPronunciationProvider, AURA_MODEL } = await load('pronunciation.js');
   let call;
   const provider = createPronunciationProvider({
-    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([4, 5, 6]); } },
+    AI: { async run(model, input, options) {
+      call = { model, input, options };
+      return new Response(new Uint8Array([4, 5, 6]), { headers: { 'Content-Type': 'audio/mpeg' } });
+    } },
   });
-  const result = await provider.synthesize({ text: 'students', locale: 'en-US' });
-  assert.equal(MELOTTS_MODEL, '@cf/myshell-ai/melotts');
-  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'students', lang: 'en' } });
+  const result = await provider.synthesize({ text: 'students', locale: 'en-US', speaker: 'orion' });
+  assert.equal(AURA_MODEL, '@cf/deepgram/aura-1');
+  assert.deepEqual(call, {
+    model: '@cf/deepgram/aura-1',
+    input: { text: 'students', speaker: 'orion', encoding: 'mp3' },
+    options: { returnRawResponse: true },
+  });
   assert.equal(result.contentType, 'audio/mpeg');
-  assert.deepEqual(Array.from(result.audio), [4, 5, 6]);
+  assert.deepEqual(Array.from(new Uint8Array(await new Response(result.audio).arrayBuffer())), [4, 5, 6]);
 });
 
-test('pronunciation adapter ignores client model and language overrides', async () => {
+test('pronunciation adapter ignores client model overrides and normalizes speaker again', async () => {
   const { createPronunciationProvider } = await load('pronunciation.js');
   let call;
   const provider = createPronunciationProvider({
-    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([1]); } },
+    AI: { async run(model, input, options) { call = { model, input, options }; return new Uint8Array([1]); } },
   });
-  await provider.synthesize({ text: 'word', locale: 'en-US', model: 'client-model', lang: 'fr' });
-  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'word', lang: 'en' } });
+  await provider.synthesize({ text: 'word', locale: 'en-US', speaker: 'evil', model: 'client-model' });
+  assert.deepEqual(call, {
+    model: '@cf/deepgram/aura-1',
+    input: { text: 'word', speaker: 'asteria', encoding: 'mp3' },
+    options: { returnRawResponse: true },
+  });
 });
 
-test('pronunciation route calls the bound MeloTTS provider and returns MP3 bytes', async () => {
+test('pronunciation route calls bound Aura-1 with the chosen speaker and returns MP3 bytes', async () => {
   const { handleRequest } = await load('index.js');
   let call;
   const configured = {
     ...env,
-    AI: { async run(model, input) { call = { model, input }; return new Uint8Array([7, 8, 9]); } },
+    AI: { async run(model, input, options) {
+      call = { model, input, options };
+      return new Response(new Uint8Array([7, 8, 9]), { headers: { 'Content-Type': 'audio/mpeg' } });
+    } },
   };
-  const response = await handleRequest(pronunciationRequest({ text: ' improves ', locale: 'en-US', model: 'evil', lang: 'fr' }), configured, upstream('{}'));
-  assert.deepEqual(call, { model: '@cf/myshell-ai/melotts', input: { prompt: 'improves', lang: 'en' } });
+  const response = await handleRequest(pronunciationRequest({ text: ' improves ', locale: 'en-US', speaker: 'luna', model: 'evil' }), configured, upstream('{}'));
+  assert.deepEqual(call, {
+    model: '@cf/deepgram/aura-1',
+    input: { text: 'improves', speaker: 'luna', encoding: 'mp3' },
+    options: { returnRawResponse: true },
+  });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.deepEqual(Array.from(new Uint8Array(await response.arrayBuffer())), [7, 8, 9]);
 });
 
-test('MeloTTS base64 audio object is decoded into MP3 response bytes', async () => {
+test('legacy MeloTTS base64 objects no longer enter the Aura-1 audio path', async () => {
   const { handleRequest } = await load('index.js');
-  const mp3 = Uint8Array.from([0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x01, 0x02]);
-  const configured = { ...env, AI: { async run() { return { audio: Buffer.from(mp3).toString('base64') }; } } };
+  const configured = { ...env, AI: { async run() { return { audio: 'SUQz' }; } } };
   const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
-  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), mp3);
+  const body = await response.json();
+  assert.equal(response.status, 502);
+  assert.equal(body.error.code, 'PRONUNCIATION_PROVIDER_ERROR');
 });
 
-test('MeloTTS audio data URL is decoded without returning base64 JSON', async () => {
-  const { handleRequest } = await load('index.js');
-  const mp3 = Uint8Array.from([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x09]);
-  const encoded = Buffer.from(mp3).toString('base64');
-  const configured = { ...env, AI: { async run() { return { audio: `data:audio/mpeg;base64,${encoded}` }; } } };
-  const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
-  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), mp3);
-});
-
-test('empty or invalid MeloTTS base64 audio fails safely', async () => {
-  const { handleRequest } = await load('index.js');
-  for (const audio of ['', '%%%not-base64%%%', 'data:audio/mpeg;base64,']) {
-    const configured = { ...env, AI: { async run() { return { audio }; } } };
-    const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
-    const body = await response.json();
-    assert.equal(response.status, 502);
-    assert.equal(body.error.code, 'PRONUNCIATION_PROVIDER_ERROR');
-  }
-});
-
-test('MeloTTS failures return a safe provider error without leaking internals', async () => {
+test('Aura-1 failures return a safe provider error without leaking internals', async () => {
   const { handleRequest } = await load('index.js');
   const configured = {
     ...env,
@@ -429,7 +432,7 @@ test('MeloTTS failures return a safe provider error without leaking internals', 
   assert.doesNotMatch(JSON.stringify(body), /account|secret|internal/i);
 });
 
-test('invalid MeloTTS output returns the same safe provider error', async () => {
+test('invalid Aura-1 output returns the same safe provider error', async () => {
   const { handleRequest } = await load('index.js');
   const configured = { ...env, AI: { async run() { return { error: 'not audio' }; } } };
   const response = await handleRequest(pronunciationRequest({ text: 'word', locale: 'en-US' }), configured, upstream('{}'));
@@ -443,7 +446,7 @@ test('pronunciation endpoint exposes a provider-neutral audio contract without c
   let received;
   const providerFactory = () => ({ synthesize: async (input) => { received = input; return { audio: new Uint8Array([1, 2, 3]), contentType: 'audio/mpeg' }; } });
   const response = await handleRequest(pronunciationRequest({ text: ' students ', locale: 'en-US' }), env, upstream('{}'), providerFactory);
-  assert.deepEqual(received, { text: 'students', locale: 'en-US' });
+  assert.deepEqual(received, { text: 'students', locale: 'en-US', speaker: 'asteria' });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('Content-Type'), 'audio/mpeg');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');

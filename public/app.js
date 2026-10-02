@@ -1805,6 +1805,25 @@ function updateAddForm() {
 
 /* ---------- AI learning ---------- */
 
+const AI_PRONUNCIATION_SPEAKER_KEY = 'flashdesk-ai-pronunciation-speaker';
+const AI_PRONUNCIATION_SPEAKERS = Object.freeze(['asteria', 'orion', 'luna']);
+const DEFAULT_AI_PRONUNCIATION_SPEAKER = 'asteria';
+
+function normalizeAiPronunciationSpeaker(value) {
+  return AI_PRONUNCIATION_SPEAKERS.includes(value) ? value : DEFAULT_AI_PRONUNCIATION_SPEAKER;
+}
+
+function loadAiPronunciationSpeaker() {
+  try { return normalizeAiPronunciationSpeaker(localStorage.getItem(AI_PRONUNCIATION_SPEAKER_KEY)); }
+  catch { return DEFAULT_AI_PRONUNCIATION_SPEAKER; }
+}
+
+function saveAiPronunciationSpeaker(value) {
+  const speaker = normalizeAiPronunciationSpeaker(value);
+  try { localStorage.setItem(AI_PRONUNCIATION_SPEAKER_KEY, speaker); } catch { /* private mode */ }
+  return speaker;
+}
+
 const AI_SETTINGS_KEY = 'flashdesk-ai-settings';
 const AI_HISTORY_KEY = 'flashdesk-ai-history';
 
@@ -1822,6 +1841,7 @@ function loadAiHistory() {
 
 let aiSettings = loadAiSettings();
 let aiHistory = loadAiHistory();
+let aiPronunciationSpeaker = loadAiPronunciationSpeaker();
 
 function saveAiSettings(endpoint, token) {
   aiSettings = { endpoint: String(endpoint || '').trim().replace(/\/+$/, ''), token: String(token || '').trim() };
@@ -1889,7 +1909,7 @@ async function playAiPronunciation(text, button) {
     const response = await fetch(`${aiSettings.endpoint}/pronounce`, {
       method: 'POST',
       headers: aiHeaders(),
-      body: JSON.stringify({ text: value, locale: 'en-US' }),
+      body: JSON.stringify({ text: value, locale: 'en-US', speaker: aiPronunciationSpeaker }),
     });
     if (!response.ok) throw new Error(`AI pronunciation failed (${response.status})`);
     const blob = await response.blob();
@@ -2084,11 +2104,13 @@ async function startAiArticleNarration(rate, paragraphIndex = null) {
 
 function aiSettingsHtml() {
   const service = state.ai.service;
+  const speakerOptions = AI_PRONUNCIATION_SPEAKERS.map((speaker) => `<option value="${speaker}" ${speaker === aiPronunciationSpeaker ? 'selected' : ''}>${speaker[0].toUpperCase()}${speaker.slice(1)}</option>`).join('');
   return `<details class="panel ai-settings">
     <summary>AI 服务</summary>
     <div class="ai-settings-grid">
       <label class="field"><span class="micro-label">Worker 地址</span><input id="ai-endpoint" type="url" value="${esc(aiSettings.endpoint)}" placeholder="https://your-ai-worker.workers.dev"></label>
       <label class="field"><span class="micro-label">访问 Token</span><input id="ai-token" type="password" value="${esc(aiSettings.token)}" autocomplete="off"></label>
+      <label class="field"><span class="micro-label">AI发音声音</span><select id="ai-pronunciation-speaker" aria-label="AI发音声音">${speakerOptions}</select></label>
     </div>
     <div class="form-actions"><button type="button" class="btn" data-ai-save-settings>保存</button><button type="button" class="btn" data-ai-test>测试连接</button></div>
     <p class="ai-service-status" id="ai-service-status">${aiServiceStatusHtml(service)}</p>
@@ -3438,6 +3460,10 @@ function bindEvents() {
   $('#ai-root').addEventListener('change', (e) => {
     if (e.target.id === 'ai-topic') state.ai.topic = e.target.value;
     if (e.target.id === 'ai-difficulty') state.ai.difficulty = e.target.value;
+    if (e.target.id === 'ai-pronunciation-speaker') {
+      aiPronunciationSpeaker = saveAiPronunciationSpeaker(e.target.value);
+      e.target.value = aiPronunciationSpeaker;
+    }
   });
 
   $('#ai-root').addEventListener('click', async (e) => {

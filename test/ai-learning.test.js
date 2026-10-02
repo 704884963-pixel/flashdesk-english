@@ -729,7 +729,7 @@ test('AI pronunciation controls use their independent playback function', () => 
 test('AI pronunciation is ephemeral and bypasses the existing audio cache', () => {
   const section = appSource.slice(appSource.indexOf('async function playAiPronunciation'), appSource.indexOf('function aiTargets'));
   assert.match(section, /\/pronounce/);
-  assert.match(section, /JSON\.stringify\(\{ text: value, locale: 'en-US' \}\)/);
+  assert.match(section, /JSON\.stringify\(\{ text: value, locale: 'en-US', speaker: aiPronunciationSpeaker \}\)/);
   assert.match(section, /AI发音中…/);
   assert.match(section, /AI发音失败/);
   assert.match(section, /aiPronunciationLoadingLabel/);

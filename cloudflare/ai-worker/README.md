@@ -20,8 +20,9 @@ The Worker also reserves a provider-neutral `POST /pronounce` interface:
 ```json
 {
   "text": "improves",
-  "locale": "en-US"
+  "locale": "en-US",
+  "speaker": "asteria"
 }
 ```
 
-It uses the same Bearer app token and origin checks as `/ai`. The provider-neutral `synthesize({ text, locale })` adapter maps `en-US` to Cloudflare Workers AI MeloTTS (`@cf/myshell-ai/melotts`) with `lang: "en"`, then returns the generated MP3 directly as `audio/mpeg`. If the Workers AI binding is unavailable, the endpoint returns `503 PRONUNCIATION_UNAVAILABLE`; provider failures return a safe `502 PRONUNCIATION_PROVIDER_ERROR` response.
+It uses the same Bearer app token and origin checks as `/ai`. The provider-neutral `synthesize({ text, locale, speaker })` adapter calls Cloudflare Workers AI Aura-1 (`@cf/deepgram/aura-1`) with MP3 encoding and a fixed speaker allowlist: `asteria`, `orion`, or `luna`. Missing or unsupported speakers safely use `asteria`, so older clients remain compatible. The raw audio response is returned directly as `audio/mpeg`; no base64 audio object is used. If the Workers AI binding is unavailable, the endpoint returns `503 PRONUNCIATION_UNAVAILABLE`; provider failures return a safe `502 PRONUNCIATION_PROVIDER_ERROR` response.
