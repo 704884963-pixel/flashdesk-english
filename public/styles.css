@@ -217,6 +217,7 @@ select:focus, input:focus, textarea:focus {
 }
 
 .tts-settings-block,
+.ai-pronunciation-settings-block,
 .audio-cache-block,
 .system-speech-block {
   display: grid;
@@ -649,7 +650,6 @@ select:focus, input:focus, textarea:focus {
 .ai-settings { margin-top: 18px; }
 .ai-settings summary { cursor: pointer; font-weight: 700; }
 .ai-settings-grid, .ai-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
-.ai-settings select { width: 100%; min-width: 0; }
 .ai-service-status, .ai-error, .ai-usage { margin-top: 10px; font-size: .82rem; color: var(--muted); }
 .ai-error { color: var(--bad); }
 .ai-targets { margin: 14px 0; }
