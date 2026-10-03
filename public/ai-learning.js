@@ -270,6 +270,29 @@
     return { task, context, options };
   }
 
+  const AI_PROVIDER_KEY = 'flashdesk-ai-provider';
+  const AI_PROVIDERS = Object.freeze(['zhipu', 'gemini']);
+  const DEFAULT_AI_PROVIDER = 'zhipu';
+
+  function normalizeAiProvider(value) {
+    return AI_PROVIDERS.includes(value) ? value : DEFAULT_AI_PROVIDER;
+  }
+
+  function loadAiProvider(storage) {
+    try { return normalizeAiProvider(storage?.getItem(AI_PROVIDER_KEY)); }
+    catch { return DEFAULT_AI_PROVIDER; }
+  }
+
+  function saveAiProvider(storage, value) {
+    const provider = normalizeAiProvider(value);
+    try { storage?.setItem(AI_PROVIDER_KEY, provider); } catch { /* private mode */ }
+    return provider;
+  }
+
+  function withAiProvider(request, provider) {
+    return { ...request, provider: normalizeAiProvider(provider) };
+  }
+
   function buildEnglishHelperRequest(query) {
     const value = String(query || '').trim();
     if (!value) throw new Error('问题不能为空');
@@ -395,6 +418,8 @@
     sentencePracticeSelection, selectArticleFocusWords, isTechnicalTarget,
     knownWordSample, buildAiContext, buildAiRequest, buildArticleTranslationRequest, lookupCacheKey,
     buildLookupWordRequest, buildEnglishHelperRequest, wordDraftFromLookup, mergeMeanings,
+    AI_PROVIDER_KEY, AI_PROVIDERS, DEFAULT_AI_PROVIDER,
+    normalizeAiProvider, loadAiProvider, saveAiProvider, withAiProvider,
   };
   global.FlashAiLearning = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

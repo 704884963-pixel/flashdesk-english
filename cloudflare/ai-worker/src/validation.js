@@ -1,3 +1,5 @@
+import { normalizeProvider } from './providers/index.js';
+
 export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper']);
 
 export function stripJsonFence(value) {
@@ -83,22 +85,24 @@ export function validateClientRequest(body) {
       visit(child);
     }
   };
-  visit(body);
+  const { provider: requestedProvider, ...requestWithoutProvider } = body;
+  visit(requestWithoutProvider);
+  const provider = normalizeProvider(requestedProvider);
   if (!body.context || typeof body.context !== 'object' || Array.isArray(body.context)) throw new Error('invalid context');
   if (body.task === 'lookup_word') {
     if (!nonempty(body.context.word) || !nonempty(body.context.sentence)) throw new Error('invalid lookup context');
-    return { task: body.task, context: { word: body.context.word.trim(), sentence: body.context.sentence.trim() }, options: {} };
+    return { task: body.task, context: { word: body.context.word.trim(), sentence: body.context.sentence.trim() }, options: {}, provider };
   }
   if (body.task === 'english_helper') {
     if (!nonempty(body.context.query)) throw new Error('invalid helper query');
-    return { task: body.task, context: { query: body.context.query.trim() }, options: {} };
+    return { task: body.task, context: { query: body.context.query.trim() }, options: {}, provider };
   }
   if (body.task === 'translate_article') {
     if (!nonempty(body.context.title) || !words(body.context.paragraphs) || !body.context.paragraphs.length) throw new Error('invalid article translation context');
-    return { task: body.task, context: { title: body.context.title.trim(), paragraphs: body.context.paragraphs.map((paragraph) => paragraph.trim()) }, options: {} };
+    return { task: body.task, context: { title: body.context.title.trim(), paragraphs: body.context.paragraphs.map((paragraph) => paragraph.trim()) }, options: {}, provider };
   }
   if (!Array.isArray(body.context.targetWords)) throw new Error('invalid context');
   const options = body.options && typeof body.options === 'object' && !Array.isArray(body.options) ? { ...body.options } : {};
   if (options.variant !== undefined) throw new Error('invalid model variant');
-  return { task: body.task, context: body.context, options };
+  return { task: body.task, context: body.context, options, provider };
 }

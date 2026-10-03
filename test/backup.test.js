@@ -66,7 +66,7 @@ test('backup summary counts Words, Articles, history and due cards', () => {
 });
 test('backup schema cannot contain settings or secrets from unrelated storage', () => {
   const text = JSON.stringify(Backup.create(source));
-  for (const forbidden of ['flashdesk-ai-settings', 'FLASHDESK_AI_TOKEN', 'ELEVENLABS_API_KEY', 'Authorization', 'audio-cache']) assert.doesNotMatch(text, new RegExp(forbidden));
+  for (const forbidden of ['flashdesk-ai-settings', 'flashdesk-ai-provider', 'FLASHDESK_AI_TOKEN', 'GEMINI_API_KEY', 'ELEVENLABS_API_KEY', 'Authorization', 'audio-cache']) assert.doesNotMatch(text, new RegExp(forbidden));
 });
 test('Data Backup is a More-menu view with export, file selection and confirmation', () => {
   assert.match(html, /data-view="backup"/); assert.match(html, /id="backup-export"/);

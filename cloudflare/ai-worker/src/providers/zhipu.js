@@ -1,3 +1,5 @@
+import { ProviderError } from './error.js';
+
 const DEFAULT_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 
 export function createZhipuProvider(env, fetchImpl = fetch) {
@@ -18,12 +20,12 @@ export function createZhipuProvider(env, fetchImpl = fetch) {
             body: JSON.stringify(body),
           });
         } catch (error) {
-          if (error?.name !== 'AbortError') error.networkFailure = true;
-          throw error;
+          if (error?.name === 'AbortError') throw error;
+          throw new ProviderError('Zhipu network request failed', { networkFailure: true, cause: error });
         }
       } finally { clearTimeout(timer); }
       if (!response.ok) {
-        const error = new Error('upstream request failed'); error.status = response.status; throw error;
+        throw new ProviderError('Zhipu upstream request failed', { status: response.status });
       }
       const payload = await response.json();
       const content = payload?.choices?.[0]?.message?.content;

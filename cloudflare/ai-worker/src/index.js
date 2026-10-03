@@ -1,4 +1,4 @@
-import { createProvider } from './providers/index.js';
+import { createProvider, normalizeProvider, providerModel } from './providers/index.js';
 import { sentenceMessages } from './prompts/sentences.js';
 import { articleMessages } from './prompts/article.js';
 import { lookupWordMessages } from './prompts/lookup-word.js';
@@ -20,7 +20,20 @@ const reply = (body, status, origin, env) => { const headers = cors(origin, env)
 const failure = (code, message, status, origin, env) => reply({ ok: false, error: { code, message } }, status, origin, env);
 const authorized = (request, env) => request.headers.get('Authorization') === `Bearer ${env.FLASHDESK_AI_TOKEN}`;
 
-export function generationOptions(task, env) {
+export function generationOptions(task, env, providerName = 'zhipu') {
+  if (normalizeProvider(providerName) === 'gemini') {
+    return {
+      model: providerModel('gemini', env),
+      ...(task === 'lookup_word' || task === 'english_helper' ? {
+        maxOutputTokens: task === 'lookup_word' ? 240 : 520,
+        temperature: 0.1,
+        reasoning: false,
+      } : {}),
+      timeoutMs: task === 'lookup_word' || task === 'english_helper'
+        ? 15000
+        : task === 'generate_sentences' ? 45000 : 60000,
+    };
+  }
   if (task === 'lookup_word' || task === 'english_helper') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
@@ -55,7 +68,10 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
   if (origin && !allowedOrigins(env).has(origin)) return failure('UNAUTHORIZED', 'Origin not allowed', 403, '', env);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin, env) });
   if (!env.FLASHDESK_AI_TOKEN || !authorized(request, env)) return failure('UNAUTHORIZED', '未授权', 401, origin, env);
-  if (url.pathname === '/health' && request.method === 'GET') return reply({ ok: true, provider: env.AI_PROVIDER, model: env.AI_MODEL }, 200, origin, env);
+  if (url.pathname === '/health' && request.method === 'GET') {
+    const providerName = normalizeProvider(url.searchParams.get('provider'));
+    return reply({ ok: true, provider: providerName, model: providerModel(providerName, env) }, 200, origin, env);
+  }
   if (url.pathname === '/pronounce' && request.method === 'POST') {
     const length = Number(request.headers.get('Content-Length') || 0);
     if (length > MAX_BODY) return failure('INVALID_REQUEST', '请求过大', 413, origin, env);
@@ -94,9 +110,9 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       : input.task === 'translate_article' ? translateArticleMessages(input.context)
         : input.task === 'english_helper' ? englishHelperMessages(input.context) : lookupWordMessages(input.context);
   let provider;
-  try { provider = createProvider(env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env); }
+  try { provider = createProvider(input.provider, env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env); }
   try {
-    const generation = generationOptions(input.task, env);
+    const generation = generationOptions(input.task, env, input.provider);
     let providerTotalMs = 0;
     let providerCalls = 0;
     let networkRetries = 0;
@@ -164,7 +180,7 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       finalWordCount = englishWordCount(data.sentences[0].english);
     }
     return reply({
-      ok: true, task: input.task, provider: env.AI_PROVIDER, model: generation.model,
+      ok: true, task: input.task, provider: input.provider, model: generation.model,
       data, usage: generated.usage,
       timing: {
         providerTotalMs, providerCalls, networkRetries, lengthRewrite,

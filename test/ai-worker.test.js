@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 const root = path.join(__dirname, '../cloudflare/ai-worker/src');
 const load = async (file) => import(pathToFileURL(path.join(root, file)).href);
 const env = { AI_PROVIDER: 'zhipu', AI_MODEL: 'glm-5.2', AI_LOOKUP_MODEL: 'glm-4.5-air', ZHIPU_API_KEY: 'test-only', FLASHDESK_AI_TOKEN: 'app-test' };
+const geminiEnv = { ...env, GEMINI_API_KEY: 'gemini-test-only', GEMINI_MODEL: 'gemini-3.8-flash' };
 const sentenceData = { sentences: [{ english: 'A natural approach helps the team evaluate reliable evidence before it changes the workflow, because careful analysis reduces hidden risks and gives every agent enough context to make a sound decision today.', referenceChinese: '一种自然的方法能帮助团队在改变工作流程前评估可靠证据，因为谨慎分析可以减少隐藏风险，并为每个智能体提供足够的背景来在今天作出合理决定。', targetWordsUsed: ['approach', 'evidence', 'workflow'] }] };
 const shortSentenceData = { sentences: [{ english: 'A careful approach helps the team evaluate evidence.', referenceChinese: '谨慎的方法有助于团队评估证据。', targetWordsUsed: ['approach', 'evidence'] }] };
 const articleText = Array.from({ length: 210 }, (_, i) => `word${i}`).join(' ');
@@ -21,7 +22,8 @@ const articleData = { title: 'A Useful Strategy', content: articleParagraphs.joi
 const translationData = { titleZh: '一个实用的策略', paragraphsZh: ['第一段中文。', '第二段中文。'] };
 const lookupData = { word: 'evaluation', baseForm: 'evaluation', meaningZh: '评估；评价', meaningInContextZh: '本句中指对工作流程进行评估', memoryReading: 'e + val + u + A + tion', chineseReading: '伊-瓦柳-诶-申（仅近似）' };
 const upstream = (content, status = 200, usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 }) => async () => new Response(JSON.stringify(status === 200 ? { choices: [{ message: { content, reasoning_content: 'private reasoning' } }], usage } : { secret: 'do not expose' }), { status, headers: { 'Content-Type': 'application/json' } });
-const request = (task, body = {}) => new Request('https://worker.example/ai', { method: 'POST', headers: { Authorization: 'Bearer app-test', 'Content-Type': 'application/json', Origin: 'https://704884963-pixel.github.io' }, body: JSON.stringify({ task, context: { targetWords: [], ...body }, options: {} }) });
+const geminiUpstream = (content, status = 200, usage = { promptTokenCount: 13, candidatesTokenCount: 9, totalTokenCount: 22 }) => async () => new Response(JSON.stringify(status === 200 ? { candidates: [{ content: { parts: [{ text: content }] }, finishReason: 'STOP' }], usageMetadata: usage } : { error: { message: 'private upstream error' } }), { status, headers: { 'Content-Type': 'application/json' } });
+const request = (task, body = {}, provider) => new Request('https://worker.example/ai', { method: 'POST', headers: { Authorization: 'Bearer app-test', 'Content-Type': 'application/json', Origin: 'https://704884963-pixel.github.io' }, body: JSON.stringify({ task, context: { targetWords: [], ...body }, options: {}, ...(provider === undefined ? {} : { provider }) }) });
 const pronunciationRequest = (body, token = 'app-test') => new Request('https://worker.example/pronounce', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Origin: 'https://704884963-pixel.github.io' }, body: JSON.stringify(body) });
 
 test('Sentence response schema accepts exactly one Sentence', async () => { const { validateAiData } = await load('validation.js'); assert.equal(validateAiData('generate_sentences', sentenceData).sentences.length, 1); });
@@ -72,18 +74,67 @@ test('lookup_word permits empty baseForm and pronunciation drafts', async () => 
 test('lookup_word rejects an empty meaningZh', async () => { const { validateAiData } = await load('validation.js'); assert.throws(() => validateAiData('lookup_word', { ...lookupData, meaningZh: ' ' })); });
 test('lookup_word rejects missing or non-string fields', async () => { const { validateAiData } = await load('validation.js'); assert.throws(() => validateAiData('lookup_word', { ...lookupData, meaningInContextZh: null })); });
 test('invalid lookup_word JSON is rejected', async () => { const { parseAiOutput } = await load('validation.js'); assert.throws(() => parseAiOutput('lookup_word', 'not json')); });
-test('lookup_word client context is trimmed and reduced to word plus sentence', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'lookup_word', context: { word: ' expected ', sentence: ' It was expected. ', extra: 'discard' }, options: { count: 99 } }); assert.deepEqual(result, { task: 'lookup_word', context: { word: 'expected', sentence: 'It was expected.' }, options: {} }); });
+test('lookup_word client context is trimmed and reduced to word plus sentence', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'lookup_word', context: { word: ' expected ', sentence: ' It was expected. ', extra: 'discard' }, options: { count: 99 } }); assert.deepEqual(result, { task: 'lookup_word', context: { word: 'expected', sentence: 'It was expected.' }, options: {}, provider: 'zhipu' }); });
 test('lookup_word rejects missing word or sentence context', async () => { const { validateClientRequest } = await load('validation.js'); assert.throws(() => validateClientRequest({ task: 'lookup_word', context: { word: '', sentence: 'Sentence.' } })); assert.throws(() => validateClientRequest({ task: 'lookup_word', context: { word: 'word', sentence: '' } })); });
-test('english_helper accepts one trimmed query and discards options', async () => { const { validateClientRequest } = await load('validation.js'); assert.deepEqual(validateClientRequest({ task: 'english_helper', context: { query: ' explain client ', history: ['secret'] }, options: { count: 9 } }), { task: 'english_helper', context: { query: 'explain client' }, options: {} }); });
+test('english_helper accepts one trimmed query and discards options', async () => { const { validateClientRequest } = await load('validation.js'); assert.deepEqual(validateClientRequest({ task: 'english_helper', context: { query: ' explain client ', history: ['secret'] }, options: { count: 9 } }), { task: 'english_helper', context: { query: 'explain client' }, options: {}, provider: 'zhipu' }); });
 test('english_helper response is one plain answer string', async () => { const { validateAiData } = await load('validation.js'); assert.deepEqual(validateAiData('english_helper', { answer: ' 客户通常指购买服务的人。 ' }), { answer: '客户通常指购买服务的人。' }); });
-test('Article translation request keeps only title and the paragraph array', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'translate_article', context: { title: ' Title ', paragraphs: [' First. ', ' Second. '], cards: ['private'], history: ['private'] }, options: { count: 99 } }); assert.deepEqual(result, { task: 'translate_article', context: { title: 'Title', paragraphs: ['First.', 'Second.'] }, options: {} }); });
+test('Article translation request keeps only title and the paragraph array', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'translate_article', context: { title: ' Title ', paragraphs: [' First. ', ' Second. '], cards: ['private'], history: ['private'] }, options: { count: 99 } }); assert.deepEqual(result, { task: 'translate_article', context: { title: 'Title', paragraphs: ['First.', 'Second.'] }, options: {}, provider: 'zhipu' }); });
 test('unknown task is rejected', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(request('chat'), env, upstream('{}')); assert.equal(response.status, 400); });
 test('Worker rejects missing auth', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(new Request('https://worker.example/health'), env, upstream('{}')); assert.equal(response.status, 401); });
 test('Worker rejects wrong auth', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(new Request('https://worker.example/health', { headers: { Authorization: 'Bearer wrong' } }), env, upstream('{}')); assert.equal(response.status, 401); });
 test('health returns provider and model without keys', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(new Request('https://worker.example/health', { headers: { Authorization: 'Bearer app-test' } }), env); const body = await response.json(); assert.deepEqual(body, { ok: true, provider: 'zhipu', model: 'glm-5.2' }); assert.doesNotMatch(JSON.stringify(body), /test-only|app-test/); });
 test('provider and model come from Worker configuration', async () => { const { handleRequest } = await load('index.js'); const custom = { ...env, AI_MODEL: 'configured-model' }; const response = await handleRequest(new Request('https://worker.example/health', { headers: { Authorization: 'Bearer app-test' } }), custom); assert.equal((await response.json()).model, 'configured-model'); });
+test('missing and invalid client providers safely default to Zhipu', async () => {
+  const { validateClientRequest } = await load('validation.js');
+  assert.equal(validateClientRequest({ task: 'generate_sentences', context: { targetWords: [] } }).provider, 'zhipu');
+  assert.equal(validateClientRequest({ task: 'generate_sentences', context: { targetWords: [] }, provider: 'unknown' }).provider, 'zhipu');
+});
+test('Gemini health selection reports the configured Gemini model without exposing its key', async () => {
+  const { handleRequest } = await load('index.js');
+  const response = await handleRequest(new Request('https://worker.example/health?provider=gemini', { headers: { Authorization: 'Bearer app-test' } }), geminiEnv);
+  const body = await response.json();
+  assert.deepEqual(body, { ok: true, provider: 'gemini', model: 'gemini-3.8-flash' });
+  assert.doesNotMatch(JSON.stringify(body), /gemini-test-only|GEMINI_API_KEY/);
+});
 test('Zhipu adapter uses Bearer API authentication', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); let init; await createZhipuProvider(env, async (_url, options) => { init = options; return (await upstream('{}'))(); }).generate({ messages: [] }); assert.equal(init.headers.Authorization, 'Bearer test-only'); });
 test('Zhipu adapter uses configured model and non-streaming mode', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); let payload; await createZhipuProvider(env, async (_url, options) => { payload = JSON.parse(options.body); return (await upstream('{}'))(); }).generate({ messages: [] }); assert.equal(payload.model, 'glm-5.2'); assert.equal(payload.stream, false); });
+test('Gemini adapter uses the official generateContent URL and x-goog-api-key header', async () => {
+  const { createGeminiProvider } = await load('providers/gemini.js'); let call;
+  await createGeminiProvider(geminiEnv, async (url, options) => { call = { url, options }; return (await geminiUpstream('{}'))(); }).generate({ messages: [{ role: 'user', content: 'Return JSON.' }], model: 'gemini-custom' });
+  assert.equal(call.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-custom:generateContent');
+  assert.equal(call.options.headers['x-goog-api-key'], 'gemini-test-only');
+  assert.doesNotMatch(call.url, /gemini-test-only/);
+});
+test('Gemini adapter maps shared messages to systemInstruction and contents with JSON output', async () => {
+  const { createGeminiProvider } = await load('providers/gemini.js'); let body;
+  await createGeminiProvider(geminiEnv, async (_url, options) => { body = JSON.parse(options.body); return (await geminiUpstream('{}'))(); }).generate({
+    messages: [{ role: 'system', content: 'System rule' }, { role: 'user', content: 'User data' }, { role: 'assistant', content: 'Earlier JSON' }],
+    model: 'gemini-3.8-flash', maxOutputTokens: 240, temperature: 0.1,
+  });
+  assert.deepEqual(body.systemInstruction, { parts: [{ text: 'System rule' }] });
+  assert.deepEqual(body.contents.map(({ role }) => role), ['user', 'model']);
+  assert.equal(body.generationConfig.responseMimeType, 'application/json');
+  assert.equal(body.generationConfig.maxOutputTokens, 240);
+  assert.equal(body.generationConfig.temperature, 0.1);
+  assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: 'low' });
+});
+test('Gemini environment model overrides the default and the default remains configurable in one place', async () => {
+  const { generationOptions } = await load('index.js');
+  assert.equal(generationOptions('generate_sentences', { ...env, GEMINI_MODEL: 'gemini-configured' }, 'gemini').model, 'gemini-configured');
+  assert.equal(generationOptions('generate_sentences', env, 'gemini').model, 'gemini-3.8-flash');
+});
+test('Gemini adapter extracts text and maps usage to provider-neutral names', async () => {
+  const { createGeminiProvider } = await load('providers/gemini.js');
+  const result = await createGeminiProvider(geminiEnv, geminiUpstream('{"answer":"ok"}')).generate({ messages: [] });
+  assert.equal(result.content, '{"answer":"ok"}');
+  assert.deepEqual(result.usage, { inputTokens: 13, outputTokens: 9, totalTokens: 22 });
+});
+test('Gemini malformed JSON, empty candidates, and safety blocks fail safely', async () => {
+  const { createGeminiProvider } = await load('providers/gemini.js');
+  await assert.rejects(() => createGeminiProvider(geminiEnv, async () => new Response('not json')).generate({ messages: [] }), /malformed JSON/);
+  await assert.rejects(() => createGeminiProvider(geminiEnv, async () => Response.json({ candidates: [] })).generate({ messages: [] }), /no text/);
+  await assert.rejects(() => createGeminiProvider(geminiEnv, async () => Response.json({ promptFeedback: { blockReason: 'SAFETY' } })).generate({ messages: [] }), /blocked/);
+});
 test('lookup_word prefers AI_LOOKUP_MODEL and falls back to AI_MODEL', async () => {
   const { generationOptions } = await load('index.js');
   assert.equal(generationOptions('lookup_word', { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' }).model, 'fast-lookup-model');
@@ -141,7 +192,22 @@ test('generate_article keeps the existing Zhipu thinking behavior', async () => 
 test('reasoning_content is never returned by adapter', async () => { const { createZhipuProvider } = await load('providers/zhipu.js'); const result = await createZhipuProvider(env, upstream('{}')).generate({ messages: [] }); assert.equal('reasoning_content' in result, false); });
 test('upstream 401 maps to safe error', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 401)); const body = await r.json(); assert.equal(body.error.code, 'UPSTREAM_ERROR'); assert.doesNotMatch(JSON.stringify(body), /secret/); });
 test('upstream 429 maps to RATE_LIMITED', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 429)); assert.equal((await r.json()).error.code, 'RATE_LIMITED'); });
+test('Gemini HTTP 429 maps to RATE_LIMITED without exposing the upstream body', async () => {
+  const { handleRequest } = await load('index.js');
+  const response = await handleRequest(request('generate_sentences', {}, 'gemini'), geminiEnv, geminiUpstream('', 429));
+  const body = await response.json();
+  assert.equal(body.error.code, 'RATE_LIMITED');
+  assert.doesNotMatch(JSON.stringify(body), /private upstream error|gemini-test-only/);
+});
 test('upstream 5xx maps to UPSTREAM_ERROR', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 500)); assert.equal((await r.json()).error.code, 'UPSTREAM_ERROR'); });
+test('Gemini 5xx and network failures reuse the existing one-retry limit', async () => {
+  const { handleRequest } = await load('index.js'); let statusCalls = 0; let networkCalls = 0;
+  const statusResponse = await handleRequest(request('generate_sentences', {}, 'gemini'), geminiEnv, async () => { statusCalls += 1; return (await geminiUpstream('', 503))(); }, undefined, Date.now, async () => {});
+  const networkResponse = await handleRequest(request('generate_sentences', {}, 'gemini'), geminiEnv, async () => { networkCalls += 1; throw new Error('private network detail'); }, undefined, Date.now, async () => {});
+  assert.equal(statusCalls, 2); assert.equal(networkCalls, 2);
+  assert.equal((await statusResponse.json()).error.code, 'UPSTREAM_ERROR');
+  assert.equal((await networkResponse.json()).error.code, 'UPSTREAM_ERROR');
+});
 test('timeout retries once and maps the final failure to TIMEOUT', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const abort = async () => { calls += 1; const e = new Error('aborted'); e.name = 'AbortError'; throw e; }; const r = await handleRequest(request('generate_sentences'), env, abort, undefined, Date.now, async () => {}); assert.equal(calls, 2); assert.equal((await r.json()).error.code, 'TIMEOUT'); });
 test('network failure retries once and can succeed on the second attempt', async () => {
   const { handleRequest } = await load('index.js'); let calls = 0;
@@ -176,6 +242,31 @@ test('retry waits before the second attempt and does not expose the first failur
   assert.deepEqual(events, ['fetch', 'wait:1000', 'fetch']); assert.equal((await r.json()).ok, true);
 });
 test('valid sentence generation returns one standardized response', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData))); const body = await r.json(); assert.equal(body.ok, true); assert.equal(body.task, 'generate_sentences'); assert.equal(body.data.sentences.length, 1); });
+test('all five text tasks use Gemini when explicitly selected', async () => {
+  const { handleRequest } = await load('index.js');
+  const cases = [
+    ['generate_sentences', {}, sentenceData],
+    ['generate_article', {}, articleData],
+    ['translate_article', { title: 'Title', paragraphs: ['First.', 'Second.'] }, translationData],
+    ['lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }, lookupData],
+    ['english_helper', { query: 'Explain client.' }, { answer: 'A client receives a professional service.' }],
+  ];
+  for (const [task, context, output] of cases) {
+    let url = '';
+    const response = await handleRequest(request(task, context, 'gemini'), geminiEnv, async (value) => { url = value; return (await geminiUpstream(JSON.stringify(output)))(); });
+    const body = await response.json();
+    assert.equal(body.ok, true, task);
+    assert.equal(body.provider, 'gemini', task);
+    assert.equal(body.model, 'gemini-3.8-flash', task);
+    assert.match(url, /generativelanguage\.googleapis\.com/, task);
+  }
+});
+test('Gemini provider failures never fall back to Zhipu', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const response = await handleRequest(request('generate_sentences', {}, 'gemini'), { ...env, GEMINI_MODEL: 'gemini-3.8-flash' }, async () => { calls += 1; return (await upstream(JSON.stringify(sentenceData)))(); });
+  const body = await response.json();
+  assert.equal(response.status, 503); assert.equal(body.error.code, 'UPSTREAM_ERROR'); assert.equal(calls, 0);
+});
 test('Sentence output with at least 32 words records equal initial and final counts', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream(JSON.stringify(sentenceData)))(); }); const body = await r.json(); assert.equal(body.ok, true); assert.equal(calls, 1); assert.equal(body.timing.providerCalls, 1); assert.equal(body.timing.networkRetries, 0); assert.equal(body.timing.lengthRewrite, false); assert.equal(body.timing.initialWordCount, 32); assert.equal(body.timing.finalWordCount, 32); });
 test('Sentence output under 32 words is rewritten once with a meaningful expansion request', async () => {
   const { handleRequest } = await load('index.js'); const payloads = [];

@@ -3,15 +3,16 @@
 This Worker is separate from the TTS Worker and keeps provider credentials off the client.
 
 1. Log in to Cloudflare with Wrangler.
-2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_PROVIDER` and `AI_MODEL`. Optionally set `AI_LOOKUP_MODEL` for word lookup and `AI_TRANSLATION_MODEL` for Article translation. Keep the `[ai]` binding so pronunciation can call Workers AI through `env.AI`.
-3. Add `ZHIPU_API_KEY` with `wrangler secret put ZHIPU_API_KEY`.
-4. Add the app access token with `wrangler secret put FLASHDESK_AI_TOKEN`.
-5. Deploy with Wrangler.
-6. In FlashDesk → AI学习 → AI 服务, enter the Worker endpoint and the app token.
+2. Copy `wrangler.toml.example` to `wrangler.toml` and configure `AI_MODEL`. Optionally set `AI_LOOKUP_MODEL` for word lookup and `AI_TRANSLATION_MODEL` for Article translation. `GEMINI_MODEL` controls the Gemini model and defaults to `gemini-3.8-flash`; it can be changed without editing source. Keep the `[ai]` binding so pronunciation can call Workers AI through `env.AI`.
+3. Add the Zhipu key with `npx wrangler secret put ZHIPU_API_KEY`.
+4. Add the Gemini key with `npx wrangler secret put GEMINI_API_KEY`.
+5. Add the app access token with `npx wrangler secret put FLASHDESK_AI_TOKEN`.
+6. Deploy with Wrangler.
+7. In FlashDesk → AI学习 → AI 服务, enter the Worker endpoint and the app token, then choose 智谱 or Gemini on that device.
 
 Never place provider keys or app tokens in source files, `wrangler.toml`, browser settings exports, or Git.
 
-Sentence and Article generation use `AI_MODEL`. `lookup_word` uses `AI_LOOKUP_MODEL`, falling back to `AI_MODEL` when needed. Article translation uses `AI_TRANSLATION_MODEL`, then falls back to `AI_LOOKUP_MODEL`, then `AI_MODEL`. Model selection remains inside the Worker and cannot be overridden by the browser.
+For Zhipu, Sentence and Article generation use `AI_MODEL`; `lookup_word` uses `AI_LOOKUP_MODEL`, falling back to `AI_MODEL`; Article translation uses `AI_TRANSLATION_MODEL`, then `AI_LOOKUP_MODEL`, then `AI_MODEL`. Gemini uses `GEMINI_MODEL` for every text task. The browser sends only the allowlisted provider name and can never supply a model or provider API key. Missing or invalid provider values safely use Zhipu for compatibility with older clients; a failed request never falls back to another provider.
 
 ## Pronunciation interface
 

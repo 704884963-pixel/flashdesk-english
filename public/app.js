@@ -1849,6 +1849,9 @@ function loadAiHistory() {
 let aiSettings = loadAiSettings();
 let aiHistory = loadAiHistory();
 let aiPronunciationSpeaker = loadAiPronunciationSpeaker();
+let aiProvider = typeof FlashAiLearning !== 'undefined'
+  ? FlashAiLearning.loadAiProvider(localStorage)
+  : 'zhipu';
 
 function saveAiSettings(endpoint, token) {
   aiSettings = { endpoint: String(endpoint || '').trim().replace(/\/+$/, ''), token: String(token || '').trim() };
@@ -1868,7 +1871,12 @@ function aiHeaders() {
 
 async function aiFetch(path, options = {}) {
   if (!aiSettings.endpoint || !aiSettings.token) throw Object.assign(new Error('请先配置 AI 服务。'), { code: 'NOT_CONFIGURED' });
-  const response = await fetch(`${aiSettings.endpoint}${path}`, { ...options, headers: { ...aiHeaders(), ...(options.headers || {}) } });
+  const requestOptions = { ...options };
+  if (path === '/ai' && typeof requestOptions.body === 'string') {
+    const request = JSON.parse(requestOptions.body);
+    requestOptions.body = JSON.stringify(FlashAiLearning.withAiProvider(request, aiProvider));
+  }
+  const response = await fetch(`${aiSettings.endpoint}${path}`, { ...requestOptions, headers: { ...aiHeaders(), ...(requestOptions.headers || {}) } });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ok === false) {
     const code = body?.error?.code || 'UPSTREAM_ERROR';
@@ -2116,6 +2124,7 @@ function aiSettingsHtml() {
     <div class="ai-settings-grid">
       <label class="field"><span class="micro-label">Worker 地址</span><input id="ai-endpoint" type="url" value="${esc(aiSettings.endpoint)}" placeholder="https://your-ai-worker.workers.dev"></label>
       <label class="field"><span class="micro-label">访问 Token</span><input id="ai-token" type="password" value="${esc(aiSettings.token)}" autocomplete="off"></label>
+      <label class="field"><span class="micro-label">AI 提供商</span><select id="ai-provider"><option value="zhipu"${aiProvider === 'zhipu' ? ' selected' : ''}>智谱</option><option value="gemini"${aiProvider === 'gemini' ? ' selected' : ''}>Gemini</option></select></label>
     </div>
     <div class="form-actions"><button type="button" class="btn" data-ai-save-settings>保存</button><button type="button" class="btn" data-ai-test>测试连接</button></div>
     <p class="ai-service-status" id="ai-service-status">${aiServiceStatusHtml(service)}</p>
@@ -2123,7 +2132,8 @@ function aiSettingsHtml() {
 }
 
 function aiServiceStatusHtml(service = state.ai.service) {
-  const connection = service ? `Provider：${esc(service.provider)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接';
+  const providerLabel = service?.provider === 'gemini' ? 'Gemini' : service?.provider === 'zhipu' ? '智谱' : service?.provider;
+  const connection = service ? `Provider：${esc(providerLabel)} · Model：${esc(service.model)} · 已连接` : '尚未测试连接';
   const timing = state.ai.requestTiming;
   if (!timing) return connection;
   const taskLabel = { generate_sentences: '今日长句', generate_article: '今日短文', translate_article: '短文翻译', lookup_word: '单词查询', english_helper: '英语助手' }[timing.task] || timing.task;
@@ -3470,6 +3480,12 @@ function bindEvents() {
   $('#ai-root').addEventListener('change', (e) => {
     if (e.target.id === 'ai-topic') state.ai.topic = e.target.value;
     if (e.target.id === 'ai-difficulty') state.ai.difficulty = e.target.value;
+    if (e.target.id === 'ai-provider') {
+      aiProvider = FlashAiLearning.saveAiProvider(localStorage, e.target.value);
+      state.ai.service = null;
+      state.ai.lookupCache.clear();
+      refreshAiServiceStatus();
+    }
   });
 
   $('#ai-root').addEventListener('click', async (e) => {
@@ -3506,7 +3522,7 @@ function bindEvents() {
       saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); $('#ai-service-status').textContent = 'AI 设置已保存在此设备。';
     } else if (button.hasAttribute('data-ai-test')) {
       saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); button.disabled = true;
-      try { const result = await aiFetch('/health'); state.ai.service = { provider: result.provider, model: result.model }; $('#ai-service-status').textContent = `Provider：${result.provider} · Model：${result.model} · 已连接`; }
+      try { const result = await aiFetch(`/health?provider=${encodeURIComponent(aiProvider)}`); state.ai.service = { provider: result.provider, model: result.model }; $('#ai-service-status').textContent = `Provider：${result.provider === 'gemini' ? 'Gemini' : '智谱'} · Model：${result.model} · 已连接`; }
       catch (err) { $('#ai-service-status').textContent = err.message; }
       finally { button.disabled = false; }
     } else if (button.hasAttribute('data-ai-generate-sentences')) {
