@@ -25,7 +25,7 @@ export function generationOptions(task, env, providerName = 'zhipu') {
     return {
       model: providerModel('gemini', env),
       ...(task === 'lookup_word' || task === 'english_helper' ? {
-        maxOutputTokens: task === 'lookup_word' ? 240 : 520,
+        maxOutputTokens: task === 'lookup_word' ? 480 : 520,
         temperature: 0.1,
         reasoning: false,
       } : {}),
@@ -37,7 +37,7 @@ export function generationOptions(task, env, providerName = 'zhipu') {
   if (task === 'lookup_word' || task === 'english_helper') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
-      maxOutputTokens: task === 'lookup_word' ? 240 : 520,
+      maxOutputTokens: task === 'lookup_word' ? 480 : 520,
       temperature: 0.1,
       reasoning: false,
       timeoutMs: 15000,

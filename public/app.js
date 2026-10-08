@@ -32,7 +32,7 @@ const state = {
     lookupCache: new Map(), requestTiming: null,
     narrationId: 0, narrationRate: null, narrationSpeed: 1,
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
-    helperQuery: '', helperAnswer: '', helperLoading: false, helperError: '',
+    helperQuery: '', helperAnswer: '', helperLookup: null, helperLoading: false, helperError: '',
   },
   backup: { pending: null, restoring: false },
 };
@@ -2181,19 +2181,49 @@ function helperAnswerHtml(answer) {
   return lines.map((line) => `<p>${esc(line).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</p>`).join('');
 }
 
+function helperLookupHtml(entry) {
+  if (!entry?.result) return '';
+  const { result } = entry;
+  const clickedWord = String(entry.word || result.word || '').trim();
+  const baseForm = String(result.baseForm || result.word || clickedWord).trim();
+  const card = aiLookupExistingCard(clickedWord, result);
+  const details = (label, value) => value
+    ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
+  const senses = Array.isArray(result.senses) ? result.senses.slice(0, 4) : [];
+  const number = card && Number.isSafeInteger(card.wordNumber) ? ` #${card.wordNumber}` : '';
+  const normalizedClicked = FlashArticleUtils.wordKey(clickedWord);
+  const normalizedCard = card ? FlashArticleUtils.wordKey(card.front) : '';
+  const existing = card ? `<div class="ai-helper-existing">
+    ${normalizedClicked && normalizedClicked !== normalizedCard ? `<div>${esc(clickedWord)} → ${esc(card.front)}</div><strong>✓ 原形 ${esc(card.front)} 已在词库${number}</strong>` : `<strong>✓ 已在词库${number}</strong>`}
+  </div>` : '';
+  return `<article class="ai-helper-lookup" aria-live="polite">
+    <header class="ai-helper-word-head"><h3>${esc(baseForm)}</h3>${result.pos ? `<span>${esc(result.pos)}</span>` : ''}</header>
+    ${details('核心义', result.coreMeaningZh || result.meaningZh)}
+    ${senses.length ? `<div class="word-detail"><span class="micro-label">常见义</span><ol class="ai-helper-senses">${senses.map((sense) => `<li><div><strong>${esc(sense.meaningZh)}</strong>${sense.pos ? `<span>${esc(sense.pos)}</span>` : ''}</div>${sense.example ? `<p>${esc(sense.example)}</p>` : ''}</li>`).join('')}</ol></div>` : ''}
+    ${details('本句含义', result.meaningInContextZh)}
+    ${details('🧠 发音拆解', result.memoryReading)}
+    ${details('🗣 中文近似', result.chineseReading)}
+    ${existing}
+    <div class="form-actions"><button type="button" class="btn" data-ai-pronounce="${esc(clickedWord)}">AI发音</button>
+      ${card ? '' : `<button type="button" class="btn btn-primary" data-ai-helper-add-word="${esc(clickedWord)}">加入词库</button>`}
+    </div>
+  </article>`;
+}
+
 function renderAiHelper() {
   $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><button class="article-back" type="button" data-ai-home>← 返回</button>
     <header class="ai-head"><h2>AI 英语助手</h2><p>一次问一个英语问题，回答不会写入学习数据。</p></header>
     <section class="panel ai-helper-panel">
       <label class="field"><span class="micro-label">你的问题</span><textarea id="ai-helper-query" rows="4" placeholder="例如：customer 和 client 有什么区别？">${esc(state.ai.helperQuery)}</textarea></label>
       <div class="ai-helper-quick" aria-label="快捷问题">
-        <button type="button" class="btn" data-ai-helper-template="请解释单词 ___ 的常见意思和简单例句">查单词</button>
-        <button type="button" class="btn" data-ai-helper-template="请给出 ___ 的常见近义词和区别">近义词</button>
-        <button type="button" class="btn" data-ai-helper-template="请比较 ___ 和 ___ 的区别">词义区别</button>
-        <button type="button" class="btn" data-ai-helper-template="请给 ___ 一个适合 CET-4 以下水平的简单例句">简单例句</button>
+        <button type="button" class="btn" data-ai-helper-action="lookup" ${state.ai.helperLoading ? 'disabled' : ''}>查单词</button>
+        <button type="button" class="btn" data-ai-helper-action="synonyms" ${state.ai.helperLoading ? 'disabled' : ''}>近义词</button>
+        <button type="button" class="btn" data-ai-helper-action="difference" ${state.ai.helperLoading ? 'disabled' : ''}>词义区别</button>
+        <button type="button" class="btn" data-ai-helper-action="example" ${state.ai.helperLoading ? 'disabled' : ''}>简单例句</button>
       </div>
       <div class="form-actions"><button type="button" class="btn btn-primary" data-ai-helper-submit ${state.ai.helperLoading ? 'disabled' : ''}>${state.ai.helperLoading ? '正在查询…' : '询问'}</button></div>
       ${state.ai.helperError ? `<p class="ai-error">${esc(state.ai.helperError)}</p>` : ''}
+      ${state.ai.helperLookup ? helperLookupHtml(state.ai.helperLookup) : ''}
       ${state.ai.helperAnswer ? `<div class="ai-helper-answer" aria-live="polite">${helperAnswerHtml(state.ai.helperAnswer)}</div>` : ''}
     </section>${aiSettingsHtml()}</div>`;
 }
@@ -2202,7 +2232,7 @@ async function askEnglishHelper() {
   if (state.ai.helperLoading) return;
   const query = String($('#ai-helper-query')?.value || '').trim();
   if (!query) { state.ai.helperError = '请输入问题。'; renderAiHelper(); return; }
-  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = '';
+  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null;
   renderAiHelper();
   const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   try {
@@ -2211,6 +2241,41 @@ async function askEnglishHelper() {
     state.ai.helperAnswer = response.data.answer;
     state.ai.service = { provider: response.provider, model: response.model };
     rememberAiTiming('english_helper', response, started);
+  } catch { state.ai.helperError = 'AI 暂时无法回答，请稍后再试。'; }
+  finally { state.ai.helperLoading = false; renderAiHelper(); }
+}
+
+async function runEnglishHelperShortcut(action) {
+  if (state.ai.helperLoading) return;
+  const input = $('#ai-helper-query');
+  const query = String(input?.value || '').trim();
+  if (!query) { input?.focus(); return; }
+  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null;
+  renderAiHelper();
+  const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  try {
+    const request = FlashAiLearning.buildEnglishHelperShortcutRequest(action, query);
+    if (action === 'lookup') {
+      // Local front/forms lookup happens before the request; baseForm is checked
+      // again after the structured response arrives.
+      aiLookupExistingCard(query, null);
+      const cacheKey = FlashAiLearning.lookupCacheKey(query, '');
+      let response;
+      if (state.ai.lookupCache.has(cacheKey)) {
+        response = { data: state.ai.lookupCache.get(cacheKey) };
+      } else {
+        response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+        state.ai.lookupCache.set(cacheKey, response.data);
+        state.ai.service = { provider: response.provider, model: response.model };
+        rememberAiTiming('lookup_word', response, started);
+      }
+      state.ai.helperLookup = { word: query, result: response.data };
+    } else {
+      const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+      state.ai.helperAnswer = response.data.answer;
+      state.ai.service = { provider: response.provider, model: response.model };
+      rememberAiTiming('english_helper', response, started);
+    }
   } catch { state.ai.helperError = 'AI 暂时无法回答，请稍后再试。'; }
   finally { state.ai.helperLoading = false; renderAiHelper(); }
 }
@@ -2747,6 +2812,7 @@ async function saveInlineAiWord(form) {
     openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
     const label = $('#article-action-content .article-learned-label');
     if (label) label.textContent = `✓ 已加入 ${card.wordNumber ? `#${card.wordNumber} ` : ''}${card.front}`;
+    if (state.ai.mode === 'helper') renderAiHelper();
   } catch (err) {
     const existing = FlashArticleUtils.buildWordLookup(state.cards).get(FlashArticleUtils.wordKey(fields.front));
     if (existing) {
@@ -2755,6 +2821,7 @@ async function saveInlineAiWord(form) {
       if (result) state.ai.lookupCache.set(cacheKey, { ...result, baseForm: existing.front });
       refreshAiSentenceWordLookup();
       openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
+      if (state.ai.mode === 'helper') renderAiHelper();
       return;
     }
     error.hidden = false; error.textContent = err.message;
@@ -3509,12 +3576,12 @@ function bindEvents() {
     if (button.dataset.aiMode) {
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
       state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
-    } else if (button.dataset.aiHelperTemplate !== undefined) {
-      state.ai.helperQuery = button.dataset.aiHelperTemplate;
-      renderAiHelper();
-      $('#ai-helper-query').focus();
+    } else if (button.dataset.aiHelperAction !== undefined) {
+      await runEnglishHelperShortcut(button.dataset.aiHelperAction);
     } else if (button.hasAttribute('data-ai-helper-submit')) {
       await askEnglishHelper();
+    } else if (button.dataset.aiHelperAddWord !== undefined) {
+      openAiSentenceWord(button.dataset.aiHelperAddWord, '', { editing: true });
     } else if (button.hasAttribute('data-ai-home')) {
       stopAiArticleNarration(false);
       state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; renderAiHome();

@@ -299,6 +299,19 @@
     return buildAiRequest('english_helper', { query: value });
   }
 
+  function buildEnglishHelperShortcutRequest(action, input) {
+    const value = String(input || '').trim();
+    if (!value) throw new Error('问题不能为空');
+    if (action === 'lookup') return buildLookupWordRequest(value, '');
+    const prompts = {
+      synonyms: `请给出 ${value} 的常见近义词和区别`,
+      difference: `请比较 ${value} 的词义区别`,
+      example: `请给 ${value} 一个适合 CET-4 以下水平的简单例句`,
+    };
+    if (!prompts[action]) throw new Error('unknown helper action');
+    return buildEnglishHelperRequest(prompts[action]);
+  }
+
   function buildArticleTranslationRequest(title, paragraphs) {
     const articleTitle = String(title || '').trim();
     const articleParagraphs = Array.isArray(paragraphs) ? paragraphs.map((paragraph) => String(paragraph || '').trim()) : [];
@@ -315,8 +328,27 @@
   function buildLookupWordRequest(word, sentence) {
     const normalizedWord = String(word || '').trim();
     const normalizedSentence = String(sentence || '').trim();
-    if (!normalizedWord || !normalizedSentence) throw new Error('word and sentence are required');
+    if (!normalizedWord) throw new Error('word is required');
     return buildAiRequest('lookup_word', { word: normalizedWord, sentence: normalizedSentence });
+  }
+
+  function compactLookupMeaning(result) {
+    const values = [
+      result?.coreMeaningZh,
+      ...(Array.isArray(result?.senses) ? result.senses.map((sense) => sense?.meaningZh) : []),
+      result?.meaningZh,
+    ];
+    const seen = new Set();
+    const meanings = [];
+    for (const value of values) {
+      for (const part of String(value || '').split(/[,，;；、\r\n]+/).map((item) => item.trim()).filter(Boolean)) {
+        if (seen.has(part)) continue;
+        seen.add(part);
+        meanings.push(part);
+        if (meanings.length === 4) return meanings.join('；');
+      }
+    }
+    return meanings.join('；');
   }
 
   function wordDraftFromLookup(clickedWord, result) {
@@ -324,7 +356,7 @@
     const front = String(result?.baseForm || '').trim() || clicked;
     return {
       front,
-      back: String(result?.meaningZh || '').trim(),
+      back: compactLookupMeaning(result),
       memoryReading: String(result?.memoryReading || '').trim(),
       chineseReading: String(result?.chineseReading || '').trim(),
       forms: clicked && wordKey(clicked) !== wordKey(front) ? [clicked] : [],
@@ -417,7 +449,8 @@
     latestSentenceTargetWords, latestSentencePrimaryTarget,
     sentencePracticeSelection, selectArticleFocusWords, isTechnicalTarget,
     knownWordSample, buildAiContext, buildAiRequest, buildArticleTranslationRequest, lookupCacheKey,
-    buildLookupWordRequest, buildEnglishHelperRequest, wordDraftFromLookup, mergeMeanings,
+    buildLookupWordRequest, buildEnglishHelperRequest, buildEnglishHelperShortcutRequest,
+    compactLookupMeaning, wordDraftFromLookup, mergeMeanings,
     AI_PROVIDER_KEY, AI_PROVIDERS, DEFAULT_AI_PROVIDER,
     normalizeAiProvider, loadAiProvider, saveAiProvider, withAiProvider,
   };

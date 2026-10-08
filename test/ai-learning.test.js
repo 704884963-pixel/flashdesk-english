@@ -518,11 +518,16 @@ test('Article generation uses latest Sentence practice as an optional preference
 test('frontend has no provider-specific conditional', () => assert.doesNotMatch(appSource, /if\s*\(\s*provider\s*===\s*['"]zhipu/));
 test('lookup_word uses the provider-neutral request schema', () => assert.equal(Ai.buildLookupWordRequest('evaluation', 'An evaluation helps.').task, 'lookup_word'));
 test('lookup_word sends only the clicked word and sentence', () => assert.deepEqual(Ai.buildLookupWordRequest(' evaluation ', ' An evaluation helps. ').context, { word: 'evaluation', sentence: 'An evaluation helps.' }));
+test('lookup_word permits AI helper lookup without sentence context', () => assert.deepEqual(Ai.buildLookupWordRequest(' maintain ', '').context, { word: 'maintain', sentence: '' }));
 test('lookup cache normalizes word case and surrounding spaces', () => assert.equal(Ai.lookupCacheKey(' Evaluation ', 'Sentence.'), Ai.lookupCacheKey('evaluation', 'Sentence.')));
 test('lookup cache keeps different sentence contexts separate', () => assert.notEqual(Ai.lookupCacheKey('evaluation', 'First sentence.'), Ai.lookupCacheKey('evaluation', 'Second sentence.')));
 test('lookup draft prefers a confident baseForm', () => assert.equal(Ai.wordDraftFromLookup('expected', { baseForm: 'expect', meaningZh: '期待' }).front, 'expect'));
 test('lookup draft falls back to the clicked token without a baseForm', () => assert.equal(Ai.wordDraftFromLookup('expected', { baseForm: '', meaningZh: '期待' }).front, 'expected'));
 test('lookup draft uses meaningZh as the editable back', () => assert.equal(Ai.wordDraftFromLookup('evaluation', { meaningZh: '评估；评价' }).back, '评估；评价'));
+test('lookup draft compacts core and common senses into at most four meanings', () => assert.equal(Ai.wordDraftFromLookup('maintain', {
+  coreMeaningZh: '保持；维持', meaningZh: '保持；维持；维护；保养；坚称',
+  senses: [{ meaningZh: '保持；维持' }, { meaningZh: '维护；保养' }, { meaningZh: '坚称；主张' }],
+}).back, '保持；维持；维护；保养'));
 test('lookup draft preserves pronunciation guidance fields', () => assert.deepEqual(Ai.wordDraftFromLookup('evaluation', { meaningZh: '评估', memoryReading: 'e + val', chineseReading: '伊-瓦尔（仅近似）' }), { front: 'evaluation', back: '评估', memoryReading: 'e + val', chineseReading: '伊-瓦尔（仅近似）', forms: [] }));
 test('lookup draft records the clicked inflection when it differs from baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('students', { baseForm: 'student', meaningZh: '学生' }).forms, ['students']));
 test('lookup draft leaves forms empty when clicked word equals baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('student', { baseForm: 'student', meaningZh: '学生' }).forms, []));
@@ -530,6 +535,13 @@ test('lookup draft ignores model-guessed forms beyond the actually clicked token
 test('context meaning merge splits Chinese and English punctuation and removes duplicates', () => assert.equal(Ai.mergeMeanings('智能体；客服人员', '客服人员, 客服代表\n服务人员'), '智能体；客服人员；客服代表；服务人员'));
 test('English helper builds one independent provider-neutral query', () => assert.deepEqual(Ai.buildEnglishHelperRequest(' customer 和 client？ '), { task: 'english_helper', context: { query: 'customer 和 client？' }, options: {} }));
 test('English helper rejects an empty query', () => assert.throws(() => Ai.buildEnglishHelperRequest('  '), /不能为空/));
+test('English helper lookup shortcut immediately builds lookup_word without sentence context', () => assert.deepEqual(Ai.buildEnglishHelperShortcutRequest('lookup', ' maintain '), { task: 'lookup_word', context: { word: 'maintain', sentence: '' }, options: {} }));
+test('other English helper shortcuts immediately build their final helper queries', () => {
+  assert.equal(Ai.buildEnglishHelperShortcutRequest('synonyms', 'maintain').context.query, '请给出 maintain 的常见近义词和区别');
+  assert.equal(Ai.buildEnglishHelperShortcutRequest('difference', 'customer 和 client').context.query, '请比较 customer 和 client 的词义区别');
+  assert.equal(Ai.buildEnglishHelperShortcutRequest('example', 'maintain').context.query, '请给 maintain 一个适合 CET-4 以下水平的简单例句');
+});
+test('English helper shortcuts reject empty input before any AI request', () => assert.throws(() => Ai.buildEnglishHelperShortcutRequest('lookup', ' '), /不能为空/));
 test('AI Sentence rendering reuses the Article word tokenizer', () => assert.match(appSource, /function interactiveWordHtml[\s\S]*?FlashArticleUtils\.wordTokens/));
 test('AI Sentence word tokens are clickable while punctuation stays outside token spans', () => { assert.match(appSource, /data-ai-sentence-word/); assert.match(appSource, /value\.slice\(position, token\.index\)/); });
 test('existing front and forms lookup reuse the canonical Article lookup', () => { const lookup = ArticleUtils.buildWordLookup([{ deck: 'Words', front: 'expect', forms: ['expected'] }]); assert.equal(lookup.get('expect').front, 'expect'); assert.equal(lookup.get('expected').front, 'expect'); });
@@ -570,16 +582,54 @@ test('English helper appears inside AI Learning rather than primary navigation',
   assert.match(appSource, /data-ai-mode="helper"/); assert.match(appSource, /AI 英语助手/);
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'public/index.html'), 'utf8'), /data-view="helper"/);
 });
-test('English helper UI has four quick templates and safe escaped answer rendering', () => {
+test('English helper UI has four immediate quick actions and safe escaped answer rendering', () => {
   const section = appSource.slice(appSource.indexOf('function helperAnswerHtml'), appSource.indexOf('function renderAiSentences'));
   for (const label of ['查单词', '近义词', '词义区别', '简单例句']) assert.match(section, new RegExp(label));
+  for (const action of ['lookup', 'synonyms', 'difference', 'example']) assert.match(section, new RegExp(`data-ai-helper-action="${action}"`));
+  assert.doesNotMatch(section, /data-ai-helper-template/);
   assert.match(section, /esc\(line\)/); assert.doesNotMatch(section, /innerHTML\s*=\s*state\.ai\.helperAnswer/);
+});
+test('English helper quick click executes immediately and empty input only focuses the input', () => {
+  const handler = aiRootClickHandler(appSource);
+  assert.match(handler, /button\.dataset\.aiHelperAction[\s\S]*?await runEnglishHelperShortcut\(button\.dataset\.aiHelperAction\)/);
+  const shortcut = appSource.slice(appSource.indexOf('async function runEnglishHelperShortcut'), appSource.indexOf('function renderAiSentences'));
+  assert.match(shortcut, /if \(!query\) \{ input\?\.focus\(\); return; \}/);
+  assert.match(shortcut, /buildEnglishHelperShortcutRequest\(action, query\)/);
+});
+test('structured helper lookup renders core meaning, up to four senses, context and pronunciation aids', () => {
+  const section = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
+  assert.match(section, /result\.coreMeaningZh \|\| result\.meaningZh/);
+  assert.match(section, /result\.senses\.slice\(0, 4\)/);
+  for (const field of ['meaningInContextZh', 'memoryReading', 'chineseReading']) assert.match(section, new RegExp(`result\.${field}`));
+  assert.match(section, /data-ai-pronounce/); assert.match(section, /data-ai-helper-add-word/);
+});
+test('helper lookup uses canonical front/forms/baseForm duplicate matching and hides add for existing cards', () => {
+  const section = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
+  assert.match(section, /aiLookupExistingCard\(clickedWord, result\)/);
+  assert.match(section, /原形[\s\S]*?已在词库/);
+  assert.match(section, /card \? '' : `[\s\S]*?加入词库/);
+});
+test('helper add opens the existing inline editor and never auto-saves', () => {
+  const handler = aiRootClickHandler(appSource);
+  const branch = handler.slice(handler.indexOf('aiHelperAddWord'));
+  assert.match(branch, /openAiSentenceWord\(button\.dataset\.aiHelperAddWord, '', \{ editing: true \}\)/);
+  assert.doesNotMatch(branch.slice(0, branch.indexOf("data-ai-home")), /saveNewCard|FlashStore\.addCard/);
+});
+test('helper Word save reuses canonical fields and never writes senses into cards', () => {
+  const save = appSource.slice(appSource.indexOf('async function saveInlineAiWord'), appSource.indexOf('async function saveAiMeaningSupplement'));
+  assert.match(save, /newCardFields/); assert.match(save, /saveNewCard\(fields\)/);
+  assert.doesNotMatch(save, /senses|coreMeaningZh/);
 });
 test('English helper quick actions use a complete two-column mobile grid', () => {
   const mobile = stylesSource.slice(stylesSource.indexOf('@media (max-width: 560px)'));
   assert.match(mobile, /\.ai-helper-quick \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)[^}]*overflow: visible/);
   assert.match(mobile, /\.ai-helper-quick \.btn \{[^}]*width: 100%;[^}]*min-width: 0/);
   assert.doesNotMatch(mobile, /\.ai-helper-quick \{[^}]*overflow-x: auto/);
+});
+test('structured helper result remains within the 375px content width', () => {
+  const mobile = stylesSource.slice(stylesSource.indexOf('@media (max-width: 560px)'));
+  assert.match(mobile, /\.ai-helper-lookup \{[^}]*width: 100%;[^}]*min-width: 0/);
+  assert.match(mobile, /\.ai-helper-lookup \.form-actions \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
 });
 test('English helper submits through the shared AI endpoint and Bearer authorization', () => {
   const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function renderAiSentences'));

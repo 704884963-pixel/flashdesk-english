@@ -28,9 +28,16 @@ export const englishParagraphCount = (value) => String(value ?? '')
 export function validateAiData(task, data, context = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid AI output');
   if (task === 'lookup_word') {
-    const fields = ['word', 'baseForm', 'meaningZh', 'meaningInContextZh', 'memoryReading', 'chineseReading'];
-    if (fields.some((field) => typeof data[field] !== 'string') || !nonempty(data.word) || !nonempty(data.meaningZh)) throw new Error('invalid word lookup');
-    return Object.fromEntries(fields.map((field) => [field, data[field].trim()]));
+    const fields = ['word', 'baseForm', 'pos', 'coreMeaningZh', 'meaningZh', 'meaningInContextZh', 'memoryReading', 'chineseReading'];
+    if (fields.some((field) => typeof data[field] !== 'string')
+      || !nonempty(data.word) || !nonempty(data.pos) || !nonempty(data.coreMeaningZh) || !nonempty(data.meaningZh)
+      || !Array.isArray(data.senses) || data.senses.length < 2 || data.senses.length > 4) throw new Error('invalid word lookup');
+    const senses = data.senses.map((sense) => {
+      if (!sense || typeof sense !== 'object' || Array.isArray(sense)
+        || !nonempty(sense.pos) || !nonempty(sense.meaningZh) || typeof sense.example !== 'string') throw new Error('invalid word lookup sense');
+      return { pos: sense.pos.trim(), meaningZh: sense.meaningZh.trim(), example: sense.example.trim() };
+    });
+    return { ...Object.fromEntries(fields.map((field) => [field, data[field].trim()])), senses };
   }
   if (task === 'english_helper') {
     if (!nonempty(data.answer)) throw new Error('invalid helper answer');
@@ -90,8 +97,8 @@ export function validateClientRequest(body) {
   const provider = normalizeProvider(requestedProvider);
   if (!body.context || typeof body.context !== 'object' || Array.isArray(body.context)) throw new Error('invalid context');
   if (body.task === 'lookup_word') {
-    if (!nonempty(body.context.word) || !nonempty(body.context.sentence)) throw new Error('invalid lookup context');
-    return { task: body.task, context: { word: body.context.word.trim(), sentence: body.context.sentence.trim() }, options: {}, provider };
+    if (!nonempty(body.context.word) || (body.context.sentence !== undefined && typeof body.context.sentence !== 'string')) throw new Error('invalid lookup context');
+    return { task: body.task, context: { word: body.context.word.trim(), sentence: String(body.context.sentence || '').trim() }, options: {}, provider };
   }
   if (body.task === 'english_helper') {
     if (!nonempty(body.context.query)) throw new Error('invalid helper query');
