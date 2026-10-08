@@ -2,6 +2,43 @@
 
 const $ = (sel) => document.querySelector(sel);
 
+function renderBuildVersion() {
+  const target = $('#build-version');
+  if (target) target.textContent = window.FLASHDESK_BUILD || '开发版';
+}
+
+function registerServiceWorker() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined'
+    || !window.FLASHDESK_BUILD || !('serviceWorker' in navigator)) return;
+
+  const reloadKey = `flashdesk-sw-reloaded-${window.FLASHDESK_BUILD}`;
+  let reloadRequested = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadRequested || sessionStorage.getItem(reloadKey) === '1') return;
+    reloadRequested = true;
+    sessionStorage.setItem(reloadKey, '1');
+    window.location.reload();
+  });
+
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' });
+      const activateWaiting = () => registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
+      activateWaiting();
+      registration.addEventListener('updatefound', () => {
+        const worker = registration.installing;
+        worker?.addEventListener('statechange', () => {
+          if (worker.state === 'installed') worker.postMessage({ type: 'SKIP_WAITING' });
+        });
+      });
+      await registration.update();
+      activateWaiting();
+    } catch (err) {
+      console.warn('FlashDesk Service Worker 更新检查失败。', err);
+    }
+  }, { once: true });
+}
+
 const state = {
   cards: [],
   history: [],
@@ -3812,6 +3849,7 @@ function bindEvents() {
 /* ---------- init ---------- */
 
 async function init() {
+  renderBuildVersion();
   bindEvents();
   renderAiPronunciationSpeakerSetting();
   initSpeechSettings();
@@ -3845,4 +3883,5 @@ async function init() {
   usageTracker.start();
 }
 
+registerServiceWorker();
 init();

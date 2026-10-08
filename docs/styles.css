@@ -134,6 +134,14 @@ button { font: inherit; color: inherit; cursor: pointer; background: none; borde
 }
 .nav-more-item.btn-active { background: var(--accent-dim); color: var(--accent); }
 .nav-more-separator { height: 1px; margin: 5px 7px; background: var(--line); }
+.nav-build-version {
+  padding: 7px 11px 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: .68rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
 @media (hover: hover) {
   .nav-more-item:hover { background: var(--panel-2); color: var(--text); }
 }

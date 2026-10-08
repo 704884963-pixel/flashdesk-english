@@ -19,6 +19,7 @@ const DOCS = path.join(ROOT, 'docs');
 
 const PRESERVE = new Set(['screenshot.jpg', 'superpowers']); // docs/ history that predates the site
 const MARKER = '<!-- build:pwa -->';
+const BUILD_MARKER = '__FLASHDESK_BUILD__';
 
 function fail(msg) {
   console.error(`build failed: ${msg}`);
@@ -77,6 +78,11 @@ const deployed = walk(DOCS)
 const hash = crypto.createHash('sha1');
 for (const p of deployed) hash.update(path.relative(DOCS, p)).update(fs.readFileSync(p));
 const version = hash.digest('hex').slice(0, 10);
+
+const builtIndexPath = path.join(DOCS, 'index.html');
+const builtIndex = fs.readFileSync(builtIndexPath, 'utf8');
+if (!builtIndex.includes(BUILD_MARKER)) fail(`missing ${BUILD_MARKER} placeholder in built index.html`);
+fs.writeFileSync(builtIndexPath, builtIndex.replaceAll(BUILD_MARKER, version));
 
 const sw = fs.readFileSync(path.join(PWA, 'sw.js'), 'utf8');
 if (!sw.includes('__CACHE_VERSION__')) fail('missing __CACHE_VERSION__ placeholder in pwa/sw.js');

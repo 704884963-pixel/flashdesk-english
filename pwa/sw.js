@@ -1,6 +1,6 @@
-// FlashDesk service worker — cache-first over a versioned precache.
-// Every asset is precached and the cache name is a content hash stamped by
-// build.js, so "cache-first" can never serve a stale mix of assets.
+// FlashDesk service worker — versioned precache with fresh navigations.
+// Static assets come from the current content-hashed cache. HTML navigations
+// prefer the network so an installed PWA does not remain pinned to an old shell.
 
 const CACHE = 'flashdesk-__CACHE_VERSION__';
 const ASSETS = [
@@ -33,6 +33,10 @@ self.addEventListener('install', (event) => {
   );
 });
 
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
@@ -46,13 +50,27 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+
+  if (req.mode === 'navigate') {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      try {
+        const response = await fetch(req, { cache: 'no-store' });
+        if (response.ok) await cache.put(req, response.clone());
+        return response;
+      } catch {
+        return (await cache.match(req, { ignoreSearch: true }))
+          || (await cache.match('./index.html'))
+          || (await cache.match('./'));
+      }
+    })());
+    return;
+  }
+
   event.respondWith(
-    caches.match(req, { ignoreSearch: true }).then((hit) => {
+    caches.match(req).then((hit) => {
       if (hit) return hit;
-      return fetch(req).catch(() => {
-        if (req.mode === 'navigate') return caches.match('./index.html');
-        throw new Error('offline and not cached');
-      });
+      return fetch(req);
     })
   );
 });
