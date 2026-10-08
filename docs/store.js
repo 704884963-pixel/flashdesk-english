@@ -93,7 +93,7 @@
     return {
       memoryReading: memoryReading.trim(),
       chineseReading: chineseReading.trim(),
-      forms: [...new Set(forms.map((form) => form.trim()).filter(Boolean))],
+      forms: window.FlashLogic.normalizeForms(forms, fields.front),
     };
   }
 

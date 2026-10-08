@@ -153,7 +153,7 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       const incomplete = data;
       const correctionMessages = [...messages,
         { role: 'assistant', content: generated.content },
-        { role: 'user', content: 'The pronunciation learning drafts are incomplete. Return the same strict JSON schema once more. Preserve the meanings and base form. For an ordinary lexical English word, provide a short practical memoryReading sound breakdown and a short chineseReading approximation draft. These are editable aids, not standard pronunciation. If a responsible draft truly cannot be given, an empty string is allowed. Return JSON only.' },
+        { role: 'user', content: 'The pronunciation learning drafts are incomplete. Return the same strict JSON schema once more. Preserve the meanings, base form, and grammatical forms. For an ordinary lexical English word, provide a short practical memoryReading sound breakdown and a short chineseReading approximation draft. These are editable aids, not standard pronunciation. If a responsible draft truly cannot be given, an empty string is allowed. Return JSON only.' },
       ];
       try {
         const corrected = await generate(correctionMessages);

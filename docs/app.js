@@ -141,8 +141,8 @@ function wordDetails(card) {
   };
 }
 
-function parseForms(text) {
-  return [...new Set(text.split(/[,，\r\n]+/).map((form) => form.trim()).filter(Boolean))];
+function parseForms(text, baseForm = '') {
+  return FlashLogic.normalizeForms(text, baseForm);
 }
 
 function newCardFields({ deck, front, back, memoryReading = '', chineseReading = '', formsText = '' }) {
@@ -155,7 +155,7 @@ function newCardFields({ deck, front, back, memoryReading = '', chineseReading =
   if (fields.deck === 'Words') {
     fields.memoryReading = String(memoryReading || '').trim();
     fields.chineseReading = String(chineseReading || '').trim();
-    fields.forms = parseForms(String(formsText || ''));
+    fields.forms = parseForms(String(formsText || ''), fields.front);
   }
   return fields;
 }
@@ -3783,7 +3783,7 @@ function bindEvents() {
     if (state.cards.find((card) => card.id === id)?.deck === 'Words') {
       fields.memoryReading = $('#edit-memory-reading').value.trim();
       fields.chineseReading = $('#edit-chinese-reading').value.trim();
-      fields.forms = parseForms($('#edit-forms').value);
+      fields.forms = parseForms($('#edit-forms').value, front);
     }
     save.disabled = true;
     $('#edit-cancel').disabled = true;

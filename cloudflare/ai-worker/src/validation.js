@@ -37,7 +37,19 @@ export function validateAiData(task, data, context = {}) {
         || !nonempty(sense.pos) || !nonempty(sense.meaningZh) || typeof sense.example !== 'string') throw new Error('invalid word lookup sense');
       return { pos: sense.pos.trim(), meaningZh: sense.meaningZh.trim(), example: sense.example.trim() };
     });
-    return { ...Object.fromEntries(fields.map((field) => [field, data[field].trim()])), senses };
+    const rawForms = data.forms === undefined ? [] : data.forms;
+    if (!Array.isArray(rawForms) || rawForms.length > 8
+      || rawForms.some((form) => !nonempty(form))) throw new Error('invalid word lookup forms');
+    const normalized = Object.fromEntries(fields.map((field) => [field, data[field].trim()]));
+    const baseKey = (normalized.baseForm || normalized.word).toLowerCase();
+    const seen = new Set();
+    const forms = rawForms.map((form) => form.trim()).filter((form) => {
+      const key = form.toLowerCase();
+      if (key === baseKey || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { ...normalized, senses, forms };
   }
   if (task === 'english_helper') {
     if (!nonempty(data.answer)) throw new Error('invalid helper answer');

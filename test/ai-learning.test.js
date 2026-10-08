@@ -531,7 +531,12 @@ test('lookup draft compacts core and common senses into at most four meanings', 
 test('lookup draft preserves pronunciation guidance fields', () => assert.deepEqual(Ai.wordDraftFromLookup('evaluation', { meaningZh: '评估', memoryReading: 'e + val', chineseReading: '伊-瓦尔（仅近似）' }), { front: 'evaluation', back: '评估', memoryReading: 'e + val', chineseReading: '伊-瓦尔（仅近似）', forms: [] }));
 test('lookup draft records the clicked inflection when it differs from baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('students', { baseForm: 'student', meaningZh: '学生' }).forms, ['students']));
 test('lookup draft leaves forms empty when clicked word equals baseForm', () => assert.deepEqual(Ai.wordDraftFromLookup('student', { baseForm: 'student', meaningZh: '学生' }).forms, []));
-test('lookup draft ignores model-guessed forms beyond the actually clicked token', () => assert.deepEqual(Ai.wordDraftFromLookup('students', { baseForm: 'student', meaningZh: '学生', forms: ['studenting'] }).forms, ['students']));
+test('lookup draft combines AI grammatical forms with the actually clicked token', () => assert.deepEqual(Ai.wordDraftFromLookup('expected', { baseForm: 'expect', meaningZh: '期待', forms: ['expects', 'EXPECTED', 'expecting', 'expect'] }).forms, ['expects', 'EXPECTED', 'expecting']));
+test('lookup draft supports irregular, noun and adjective inflections', () => {
+  assert.deepEqual(Ai.wordDraftFromLookup('go', { baseForm: 'go', meaningZh: '去', forms: ['goes', 'went', 'gone', 'going'] }).forms, ['goes', 'went', 'gone', 'going']);
+  assert.deepEqual(Ai.wordDraftFromLookup('strategy', { baseForm: 'strategy', meaningZh: '策略', forms: ['strategies'] }).forms, ['strategies']);
+  assert.deepEqual(Ai.wordDraftFromLookup('strict', { baseForm: 'strict', meaningZh: '严格', forms: ['stricter', 'strictest'] }).forms, ['stricter', 'strictest']);
+});
 test('context meaning merge splits Chinese and English punctuation and removes duplicates', () => assert.equal(Ai.mergeMeanings('智能体；客服人员', '客服人员, 客服代表\n服务人员'), '智能体；客服人员；客服代表；服务人员'));
 test('English helper builds one independent provider-neutral query', () => assert.deepEqual(Ai.buildEnglishHelperRequest(' customer 和 client？ '), { task: 'english_helper', context: { query: 'customer 和 client？' }, options: {} }));
 test('English helper rejects an empty query', () => assert.throws(() => Ai.buildEnglishHelperRequest('  '), /不能为空/));

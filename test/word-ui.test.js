@@ -51,7 +51,7 @@ test('Word back shows ordered escaped details while front contains no answer', (
 
 test('Add/Edit share forms parser for comma, Chinese comma and newline', () => {
   const h = client([]);
-  assert.equal(h.run("JSON.stringify(parseForms(' expected，expecting\\nexpected, Expected,  '))"), JSON.stringify(['expected', 'expecting', 'Expected']));
+  assert.equal(h.run("JSON.stringify(parseForms(' expected，expecting\\nexpected, Expected,  '))"), JSON.stringify(['expected', 'expecting']));
 });
 
 test('Quiz uses Word front/back and ignores Word extras', () => {

@@ -50,7 +50,7 @@ function wordFields(fields) {
   return {
     memoryReading: memoryReading.trim(),
     chineseReading: chineseReading.trim(),
-    forms: [...new Set(forms.map((form) => form.trim()).filter(Boolean))],
+    forms: FlashLogic.normalizeForms(forms, fields.front),
   };
 }
 

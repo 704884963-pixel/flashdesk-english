@@ -1,12 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { reviewQueue, similarity, rankDistractors, buildChoices, isWeakCard,
-  effectiveReviewStep, gradeReviewCard, REVIEW_INTERVAL_DAYS } = require('../public/logic.js');
+  effectiveReviewStep, gradeReviewCard, normalizeForms, REVIEW_INTERVAL_DAYS } = require('../public/logic.js');
 
 const card = (id, front, back, due = 0, deck = 'D') => ({ id, front, back, due, deck });
 
 const pairA = () => card('a', 'Transparency', 'Understand how the system works', 0);
 const pairB = () => card('b', 'Understand how the system works', 'Transparency', 0);
+
+test('forms normalize case-insensitively while preserving the first display spelling', () => {
+  assert.deepEqual(normalizeForms([' expects ', 'EXPECTED', 'expected', '', 'Expecting', 'EXPECT'], 'expect'),
+    ['expects', 'EXPECTED', 'Expecting']);
+  assert.deepEqual(normalizeForms('strategies， strategies\nstrategy', 'strategy'), ['strategies']);
+});
 
 test('current weak status requires historical lapses and a zero streak', () => {
   assert.equal(isWeakCard({ lapses: 1, streak: 0 }), true);

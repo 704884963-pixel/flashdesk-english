@@ -71,7 +71,7 @@ for (const mode of ['Node', 'PWA']) {
       wordNumber: 999, due: 0, streak: 0, lapses: 0, created: 0,
     });
     assert.deepEqual(plain(card), { ...original, front: 'expect', back: '预期；期待',
-      memoryReading: 'ex + pect', chineseReading: '伊克斯', forms: ['expected', 'Expected'] });
+      memoryReading: 'ex + pect', chineseReading: '伊克斯', forms: ['expected'] });
     assert.equal(h.read().meta.nextWordNumber, 139);
   });
   test(`${mode}: edit rejects case/space duplicate but allows own front`, async (t) => {
@@ -169,9 +169,14 @@ for (const mode of ['Node', 'PWA']) {
     assert.equal(card.front, 'expect');
     assert.equal(card.memoryReading, 'ex + pect');
     assert.equal(card.chineseReading, '伊克斯-佩克特');
-    assert.deepEqual(plain(card.forms), ['expected', 'Expected', 'expecting']);
+    assert.deepEqual(plain(card.forms), ['expected', 'expecting']);
     card.forms.push('mutation');
-    assert.equal((await h.store.load()).cards[0].forms.length, 3);
+    assert.equal((await h.store.load()).cards[0].forms.length, 2);
+  });
+  test(`${mode}: forms remove the front itself with case-insensitive comparison`, async (t) => {
+    const h = await harness(t, mode);
+    const { card } = await h.store.addCard({ ...word('Expect'), forms: [' expect ', 'expects', 'EXPECTED', 'expected', 'expecting'] });
+    assert.deepEqual(plain(card.forms), ['expects', 'EXPECTED', 'expecting']);
   });
   test(`${mode}: invalid Word fields rejected without consuming a number`, async (t) => {
     const h = await harness(t, mode);

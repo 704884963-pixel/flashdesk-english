@@ -354,12 +354,16 @@
   function wordDraftFromLookup(clickedWord, result) {
     const clicked = String(clickedWord || '').trim();
     const front = String(result?.baseForm || '').trim() || clicked;
+    const forms = [
+      ...(Array.isArray(result?.forms) ? result.forms : []),
+      ...(clicked && wordKey(clicked) !== wordKey(front) ? [clicked] : []),
+    ];
     return {
       front,
       back: compactLookupMeaning(result),
       memoryReading: String(result?.memoryReading || '').trim(),
       chineseReading: String(result?.chineseReading || '').trim(),
-      forms: clicked && wordKey(clicked) !== wordKey(front) ? [clicked] : [],
+      forms: FlashLogic.normalizeForms(forms, front),
     };
   }
 

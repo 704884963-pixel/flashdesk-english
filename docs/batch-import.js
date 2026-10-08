@@ -1,13 +1,13 @@
 // FlashDesk batch text parser and preview planner. Pure functions only:
 // parsing/previewing never writes cards, localStorage, or server data.
 
-(() => {
+((global, FlashLogic) => {
   const TYPES = { WORD: 'Words', SENTENCE: 'Sentences' };
   const COMMON_FIELDS = new Set(['front', 'back']);
   const WORD_FIELDS = new Set(['front', 'back', 'memoryReading', 'chineseReading', 'forms']);
 
-  function normalizeForms(value) {
-    return [...new Set(String(value || '').split(/[,，]+/).map((form) => form.trim()).filter(Boolean))];
+  function normalizeForms(value, baseForm = '') {
+    return FlashLogic.normalizeForms(value, baseForm);
   }
 
   function finishBlock(block, index) {
@@ -30,7 +30,7 @@
       back,
       memoryReading: deck === 'Words' ? String(block.fields.memoryReading || '').trim() : '',
       chineseReading: deck === 'Words' ? String(block.fields.chineseReading || '').trim() : '',
-      forms: deck === 'Words' ? normalizeForms(block.fields.forms) : [],
+      forms: deck === 'Words' ? normalizeForms(block.fields.forms, front) : [],
       errors,
     };
   }
@@ -128,4 +128,5 @@
   };
   if (typeof window !== 'undefined') window.FlashBatchImport = FlashBatchImport;
   if (typeof module !== 'undefined' && module.exports) module.exports = FlashBatchImport;
-})();
+})(typeof window !== 'undefined' ? window : globalThis,
+  typeof module !== 'undefined' && module.exports ? require('./logic.js') : globalThis.FlashLogic);

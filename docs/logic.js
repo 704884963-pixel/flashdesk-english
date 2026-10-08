@@ -6,6 +6,22 @@
   const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60, 120, 240, 365];
   const REVIEW_DAY_MS = 24 * 60 * 60 * 1000;
 
+  function normalizeForms(value, baseForm = '') {
+    const values = Array.isArray(value) ? value : String(value || '').split(/[,，\r\n]+/);
+    const baseKey = norm(baseForm);
+    const seen = new Set();
+    const forms = [];
+    for (const valueItem of values) {
+      if (typeof valueItem !== 'string') continue;
+      const form = valueItem.trim();
+      const key = norm(form);
+      if (!key || key === baseKey || seen.has(key)) continue;
+      seen.add(key);
+      forms.push(form);
+    }
+    return forms;
+  }
+
   // Legacy cards used streak as both the correctness counter and interval
   // index. Keep them readable without migrating the dataset; the first real
   // grade naturally writes the independent reviewStep field.
@@ -298,6 +314,7 @@
 
   const FlashLogic = {
     REVIEW_INTERVAL_DAYS, effectiveReviewStep, gradeReviewCard,
+    normalizeForms,
     reviewQueue, similarity, rankDistractors, buildChoices,
     WORD_QUIZ_TYPES, isWeakCard, wordQuizPool, wordQuizWeight, selectWordQuizCards,
     buildWordQuizChoices, buildWordQuizQuestion, mixedWordQuizTypes,
