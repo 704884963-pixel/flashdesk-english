@@ -358,7 +358,7 @@ test('full backup still carries usage stats and the restore summary mentions it'
   assert.match(backup, /usageStats/);
   assert.match(backup, /normalizeUsageStats/);
   assert.match(appSource, /usageStats: usageTracker\.exportStats\(\)/);
-  assert.match(appSource, /usageTracker\.replaceStats\(backup\.usageStats\)/);
+  assert.match(appSource, /usageTracker\.replaceStats\(validated\.usageStats\)/);
   const summary = appSource.slice(appSource.indexOf('function backupSummaryHtml'), appSource.indexOf('function renderBackupView'));
   assert.match(summary, /学习统计[\s\S]*已包含/);
 });

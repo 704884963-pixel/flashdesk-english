@@ -21,6 +21,18 @@
     return translations;
   }
 
+  function safeExternalUrl(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      const url = new URL(trimmed);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? trimmed : null;
+    } catch {
+      return null;
+    }
+  }
+
   function normalizeArticleInput(input) {
     const title = typeof input?.title === 'string' ? input.title.trim() : '';
     const content = typeof input?.content === 'string' ? normalizeContent(input.content) : '';
@@ -29,13 +41,7 @@
     const publishedAt = typeof input?.publishedAt === 'string' ? input.publishedAt.trim() : '';
     if (!title) throw new Error('文章标题不能为空');
     if (!content) throw new Error('文章正文不能为空');
-    if (sourceUrl) {
-      let url;
-      try { url = new URL(sourceUrl); } catch { throw new Error('原文链接必须是有效的 http / https 地址'); }
-      if (!['http:', 'https:'].includes(url.protocol)) {
-        throw new Error('原文链接必须是有效的 http / https 地址');
-      }
-    }
+    if (sourceUrl && !safeExternalUrl(sourceUrl)) throw new Error('原文链接必须是有效的 http / https 地址');
     const article = { title, source, sourceUrl, publishedAt, content };
     const paragraphTranslations = normalizeParagraphTranslations(input?.paragraphTranslations, splitParagraphs(content).length);
     if (paragraphTranslations.length) article.paragraphTranslations = paragraphTranslations;
@@ -188,7 +194,7 @@
   }
 
   const FlashArticleUtils = {
-    normalizeContent, normalizeParagraphTranslations, normalizeArticleInput, splitParagraphs, splitSentences,
+    normalizeContent, normalizeParagraphTranslations, safeExternalUrl, normalizeArticleInput, splitParagraphs, splitSentences,
     wordTokens, wordKey, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
     normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists,
   };

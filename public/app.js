@@ -2557,6 +2557,7 @@ function articleParagraphRowHtml(paragraph, paragraphIndex, lookup, translations
 function renderArticleReader() {
   const article = state.article.current;
   if (!article) return renderArticleHome();
+  const sourceUrl = FlashArticleUtils.safeExternalUrl(article.sourceUrl);
   const metrics = articleMetrics(article);
   state.article.parsed = metrics.analysis;
   const sourceLine = [article.source, articleDate(article.publishedAt)].filter(Boolean).join(' · ');
@@ -2573,7 +2574,7 @@ function renderArticleReader() {
         <span class="article-recognition-stat">当前认识率 <strong id="article-recognition-rate">${articlePercent(metrics.recognition.percent)}%</strong></span>
         <span>${metrics.analysis.wordCount.toLocaleString()} words</span>
         <span>FlashDesk 命中率 <span id="article-hit-rate">${metrics.coverage.percent}%</span></span>
-        ${article.sourceUrl ? `<a href="${esc(article.sourceUrl)}" target="_blank" rel="noopener noreferrer">打开原文</a>` : ''}
+        ${sourceUrl ? `<a href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">打开原文</a>` : ''}
       </div>
       <div class="article-recognition-note">基于你标记的不认识词</div>
       <div class="article-reader-progress"><span>阅读进度 <strong id="article-progress-label">${progress}%</strong></span>
@@ -2983,13 +2984,17 @@ async function exportFullBackup() {
 }
 
 async function restoreFullBackup(backup) {
+  // Revalidate the complete pending backup at the final boundary before even
+  // reading current stores. This prevents stale/programmatically-mutated
+  // preview data from reaching the first persistent write.
+  const validated = FlashBackup.validate(backup);
   const current = await collectFullBackup();
   const previousAiRaw = localStorage.getItem(AI_HISTORY_KEY);
   try {
-    await FlashStore.replaceSnapshot(backup.learning);
-    await ArticleStore.replaceSnapshot(backup.articles);
-    setAiHistorySnapshot(backup.aiLearning);
-    usageTracker.replaceStats(backup.usageStats);
+    await FlashStore.replaceSnapshot(validated.learning);
+    await ArticleStore.replaceSnapshot(validated.articles);
+    setAiHistorySnapshot(validated.aiLearning);
+    usageTracker.replaceStats(validated.usageStats);
   } catch (error) {
     const rollbackErrors = [];
     try { await FlashStore.replaceSnapshot(current.learning); } catch (err) { rollbackErrors.push(err); }

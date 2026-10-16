@@ -10,14 +10,30 @@
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
   const nonempty = (value) => typeof value === 'string' && Boolean(value.trim());
 
+  function normalizedExternalUrl(value) {
+    if (value === undefined || value === null) return value;
+    if (typeof value !== 'string') throw new Error('文章原文链接无效');
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    let url;
+    try { url = new URL(trimmed); } catch { throw new Error('文章原文链接必须是有效的 http / https 地址'); }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error('文章原文链接协议不安全，仅允许 http / https');
+    }
+    return trimmed;
+  }
+
   function normalizeLearning(value) {
     if (!object(value) || !Array.isArray(value.cards) || !Array.isArray(value.history)) {
       throw new Error('学习数据格式无效');
     }
+    const ids = new Set();
     const cards = value.cards.map((card) => {
-      if (!object(card) || !nonempty(card.front) || !nonempty(card.back) || !nonempty(card.deck)) {
+      if (!object(card) || !nonempty(card.id) || !nonempty(card.front) || !nonempty(card.back) || !nonempty(card.deck)) {
         throw new Error('卡片核心字段无效');
       }
+      if (ids.has(card.id)) throw new Error(`存在重复卡片 ID：${card.id}`);
+      ids.add(card.id);
       for (const field of ['due', 'streak', 'lapses', 'created']) {
         if (card[field] !== undefined && !Number.isFinite(card[field])) throw new Error(`卡片 ${field} 无效`);
       }
@@ -41,16 +57,21 @@
     if (!object(value) || !Array.isArray(value.articles) || !Array.isArray(value.unknownWords)) {
       throw new Error('阅读数据格式无效');
     }
+    const ids = new Set();
     const articles = value.articles.map((article) => {
       if (!object(article) || !nonempty(article.id) || !nonempty(article.title) || !nonempty(article.content)) {
         throw new Error('文章核心字段无效');
       }
+      if (ids.has(article.id)) throw new Error(`存在重复文章 ID：${article.id}`);
+      ids.add(article.id);
       if (article.paragraphTranslations !== undefined
           && (!Array.isArray(article.paragraphTranslations)
             || article.paragraphTranslations.some((item) => typeof item !== 'string'))) {
         throw new Error('文章段落翻译无效');
       }
-      return clone(article);
+      const normalized = clone(article);
+      if ('sourceUrl' in article) normalized.sourceUrl = normalizedExternalUrl(article.sourceUrl);
+      return normalized;
     });
     return {
       articles,

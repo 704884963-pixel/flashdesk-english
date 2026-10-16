@@ -26,6 +26,33 @@ test('Article source may be empty', () => assert.equal(Utils.normalizeArticleInp
 test('Article accepts an http source URL', () => assert.equal(Utils.normalizeArticleInput({ title: 't', content: 'c', sourceUrl: 'http://example.com' }).sourceUrl, 'http://example.com'));
 test('Article accepts an https source URL', () => assert.equal(Utils.normalizeArticleInput(sample).sourceUrl, sample.sourceUrl));
 test('Article rejects a non-http source URL', () => assert.throws(() => Utils.normalizeArticleInput({ title: 't', content: 'c', sourceUrl: 'file:///tmp/a' }), /http/));
+test('safeExternalUrl only returns trimmed absolute http and https links', () => {
+  assert.equal(Utils.safeExternalUrl(' https://example.com/a '), 'https://example.com/a');
+  assert.equal(Utils.safeExternalUrl('http://example.com/a'), 'http://example.com/a');
+  for (const value of [
+    'javascript:alert(1)', 'JAVASCRIPT:alert(1)', ' javascript:alert(1) ',
+    'data:text/html,<script>alert(1)</script>', 'file:///tmp/a', 'vbscript:msgbox(1)',
+    'ftp://example.com/a', 'blob:https://example.com/id', 'custom://example.com',
+    'httpx://example.com', 'httpsjavascript:alert(1)', '/relative/path', '', null,
+  ]) assert.equal(Utils.safeExternalUrl(value), null);
+});
+test('Reading source links pass through safeExternalUrl before href rendering', () => {
+  const renderSource = appSource.slice(appSource.indexOf('function renderArticleReader'), appSource.indexOf('function renderArticleView'));
+  assert.match(renderSource, /const sourceUrl = FlashArticleUtils\.safeExternalUrl\(article\.sourceUrl\)/);
+  assert.match(renderSource, /sourceUrl \? `<a href="\$\{esc\(sourceUrl\)\}/);
+  assert.doesNotMatch(renderSource, /href="\$\{esc\(article\.sourceUrl\)\}/);
+});
+test('Reading never renders a dangerous runtime source URL as a clickable href', () => {
+  const unsafe = readingRenderHarness({
+    article: { id: 'unsafe', title: 'Unsafe source', content: 'English only.', sourceUrl: 'javascript:alert(1)' },
+  });
+  assert.doesNotMatch(unsafe, /href="javascript:/i);
+  assert.doesNotMatch(unsafe, />打开原文</);
+  const safe = readingRenderHarness({
+    article: { id: 'safe', title: 'Safe source', content: 'English only.', sourceUrl: 'https://example.com/a' },
+  });
+  assert.match(safe, /href="https:\/\/example\.com\/a"/);
+});
 test('Windows newlines normalize without flattening paragraphs', () => assert.equal(Utils.normalizeContent(' A\r\n\r\nB '), 'A\n\nB'));
 
 /* ---------- optional paragraph translations ---------- */
