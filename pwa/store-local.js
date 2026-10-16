@@ -4,6 +4,9 @@
 
 (() => {
   const KEY = 'flashdesk-data';
+  const WRITER_LOCK = 'flashdesk-learning-store';
+  const STORE_CONFLICT = 'STORE_CONFLICT';
+  const STORE_CONFLICT_MESSAGE = '学习数据已在另一个窗口更新。请刷新当前页面后继续，避免覆盖学习记录。';
   const makeId = () => 'c_' + Date.now() + '_' + Math.random().toString(16).slice(2, 6);
 
   function toCard({ front, back, deck }) {
@@ -24,6 +27,24 @@
   let data;
   let initError;
   let ready = Promise.resolve();
+  let expectedPersistedRaw = null;
+  let externalChangeDetected = false;
+
+  function conflictError() {
+    const error = new Error(STORE_CONFLICT_MESSAGE);
+    error.code = STORE_CONFLICT;
+    return error;
+  }
+
+  async function withWriterLock(callback) {
+    if (navigator.locks && typeof navigator.locks.request === 'function') {
+      return navigator.locks.request(WRITER_LOCK, callback);
+    }
+    // Degraded protection for non-Chromium runtimes: the version comparison
+    // still rejects already-stale pages, but without Web Locks it is not an
+    // atomic cross-tab compare-and-set operation.
+    return callback();
+  }
 
   function validData(value) {
     return value && Array.isArray(value.cards) && Array.isArray(value.history);
@@ -43,17 +64,29 @@
           if (!response.ok) throw new Error(`无法加载初始词库（${response.status}）`);
           return response.json();
         })
-        .then((initial) => {
+        .then(async (initial) => {
           if (!validData(initial)) throw new Error('初始词库格式无效');
-          // Another tab may have created data while the request was in flight.
-          // Existing local data always wins, even when its cards array is empty.
-          const existing = localStorage.getItem(KEY);
-          data = existing === null ? clone(initial) : parseStored(existing);
-          if (existing === null) persist();
+          await withWriterLock(async () => {
+            // Another tab may have created data while the request was in flight.
+            // Existing local data always wins, even when its cards array is empty.
+            const existing = localStorage.getItem(KEY);
+            if (existing === null) {
+              data = clone(initial);
+              const initialRaw = JSON.stringify(data);
+              localStorage.setItem(KEY, initialRaw);
+              expectedPersistedRaw = initialRaw;
+              externalChangeDetected = false;
+            } else {
+              data = parseStored(existing);
+              expectedPersistedRaw = existing;
+              externalChangeDetected = false;
+            }
+          });
         })
         .catch((err) => { initError = err; });
     } else {
       data = parseStored(raw);
+      expectedPersistedRaw = raw;
     }
   } catch (err) {
     initError = err;
@@ -149,17 +182,23 @@
     return changes;
   }
 
-  function persist(value = data) {
-    // Throws on quota/private-mode failures so callers surface the existing
-    // "Save failed" / "Could not save" paths instead of losing data silently.
-    localStorage.setItem(KEY, JSON.stringify(value));
-  }
-  function commitMutation(mutator) {
-    const draft = clone(data);
-    const result = mutator(draft);
-    persist(draft);
-    data = draft;
-    return result;
+  async function commitMutation(mutator) {
+    return withWriterLock(async () => {
+      // Read and compare only after acquiring the cross-tab writer lock. The
+      // comparison and write therefore share one critical section.
+      const currentRaw = localStorage.getItem(KEY);
+      if (externalChangeDetected || currentRaw !== expectedPersistedRaw) throw conflictError();
+      const draft = clone(data);
+      const result = mutator(draft);
+      const nextRaw = JSON.stringify(draft);
+      // Throws on quota/private-mode failures. FD-02 semantics remain intact:
+      // the in-memory snapshot is published only after persistence succeeds.
+      localStorage.setItem(KEY, nextRaw);
+      data = draft;
+      expectedPersistedRaw = nextRaw;
+      externalChangeDetected = false;
+      return result;
+    });
   }
   function findCard(id, state = data) {
     const card = state.cards.find((c) => c.id === id);
@@ -186,21 +225,23 @@
       await ensureReady();
       if (!validData(snapshot)) throw new Error('学习数据格式无效');
       const replacement = clone(snapshot);
-      persist(replacement);
-      data = replacement;
+      await commitMutation((draft) => {
+        for (const key of Object.keys(draft)) delete draft[key];
+        Object.assign(draft, replacement);
+      });
       return this.load();
     },
 
     async addCard(fields) {
       await ensureReady();
-      const card = commitMutation((draft) => addCardInMemory(draft, fields));
+      const card = await commitMutation((draft) => addCardInMemory(draft, fields));
       return { card: clone(card) };
     },
 
     async importBatch(items) {
       await ensureReady();
       if (!Array.isArray(items)) throw new Error('items must be an array');
-      const result = commitMutation((draft) => {
+      const result = await commitMutation((draft) => {
         const cards = [];
         let addedWords = 0;
         let addedSentences = 0;
@@ -236,7 +277,7 @@
           || typeof back !== 'string' || !back.trim()) {
         throw new Error('front and back must be non-empty strings');
       }
-      const card = commitMutation((draft) => {
+      const card = await commitMutation((draft) => {
         const draftCard = findCard(id, draft);
         const changes = editableWordFields(draft, draftCard, fields);
         draftCard.front = front.trim();
@@ -249,7 +290,7 @@
 
     async gradeCard(id, grade) {
       await ensureReady();
-      const card = commitMutation((draft) => {
+      const card = await commitMutation((draft) => {
         const draftCard = findCard(id, draft);
         window.FlashLogic.gradeReviewCard(draftCard, grade);
         return draftCard;
@@ -259,7 +300,7 @@
 
     async deleteCard(id) {
       await ensureReady();
-      commitMutation((draft) => {
+      await commitMutation((draft) => {
         const card = draft.cards.find((c) => c.id === id);
         if (card && Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0) {
           draft.meta = { ...draft.meta, nextWordNumber: nextWordNumber(draft) };
@@ -271,7 +312,7 @@
 
     async logSession({ deck, reviewed, correct, easy = 0, remember = Math.max(0, correct - easy), again = 0 }) {
       await ensureReady();
-      commitMutation((draft) => {
+      await commitMutation((draft) => {
         draft.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
       });
       return { ok: true, logged: true };
@@ -279,7 +320,7 @@
 
     async logQuiz({ missedIds }) {
       await ensureReady();
-      commitMutation((draft) => {
+      await commitMutation((draft) => {
         const now = Date.now();
         for (const id of missedIds || []) {
           const card = draft.cards.find((c) => c.id === id);
@@ -300,8 +341,8 @@
       return JSON.stringify(data, null, 2);
     },
 
-    importData(text) {
-      requireReady();
+    async importData(text) {
+      await ensureReady();
       let parsed;
       try {
         parsed = JSON.parse(text);
@@ -317,7 +358,7 @@
       if (Array.isArray(parsed)) {
         // Bare card list -> merge as fresh cards, skip duplicates by front+deck.
         if (!parsed.every(validCard)) throw new Error('every card needs front, back, and deck');
-        const added = commitMutation((draft) => {
+        const added = await commitMutation((draft) => {
           const seen = new Set(draft.cards.map((c) => `${c.front} ${c.deck}`));
           let count = 0;
           for (const c of parsed) {
@@ -372,14 +413,28 @@
           },
         };
         replacement.meta.nextWordNumber = nextWordNumber(replacement);
-        persist(replacement);
-        data = replacement;
+        await commitMutation((draft) => {
+          for (const key of Object.keys(draft)) delete draft[key];
+          Object.assign(draft, replacement);
+        });
         return `Imported ${replacement.cards.length} cards (full replace).`;
       }
 
       throw new Error('expected a full export or a list of {front, back, deck} cards');
     },
+
+    hasExternalChange() {
+      return externalChangeDetected;
+    },
   };
+
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('storage', (event) => {
+      if (event.key === KEY && event.newValue !== expectedPersistedRaw) {
+        externalChangeDetected = true;
+      }
+    });
+  }
 
   // Ask the browser to protect this origin's storage from eviction.
   if (navigator.storage && navigator.storage.persist) {

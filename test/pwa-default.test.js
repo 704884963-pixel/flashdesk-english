@@ -102,7 +102,7 @@ test('PWA full export/import preserves schema, Word details, progress, history a
 
   const targetDevice = harness();
   await targetDevice.store.load();
-  targetDevice.store.importData(exported);
+  await targetDevice.store.importData(exported);
   assert.deepEqual(JSON.parse(targetDevice.store.exportData()), JSON.parse(exported));
   const restored = plain(await targetDevice.store.load());
   assert.equal(restored.schemaVersion, 2);

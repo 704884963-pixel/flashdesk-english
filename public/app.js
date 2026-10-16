@@ -132,6 +132,13 @@ function esc(s) {
   }[ch]));
 }
 
+const STORE_CONFLICT_MESSAGE = '学习数据已在另一个窗口更新。请刷新当前页面后继续，避免覆盖学习记录。';
+
+function learningStoreErrorMessage(error, prefix = '保存失败') {
+  if (error?.code === 'STORE_CONFLICT') return STORE_CONFLICT_MESSAGE;
+  return `${prefix}：${error?.message || '未知错误'}`;
+}
+
 function wordDetails(card) {
   return {
     wordNumber: Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0 ? card.wordNumber : null,
@@ -1129,7 +1136,7 @@ async function grade(kind) {
   try {
     ({ card } = await FlashStore.gradeCard(id, kind));
   } catch (err) {
-    toast(`保存失败： ${err.message}`);
+    toast(learningStoreErrorMessage(err));
     s.grading = false;
     return;
   }
@@ -1176,6 +1183,7 @@ async function completeSession() {
       remember: s.correct - s.easy, easy: s.easy, again: s.again });
   } catch (err) {
     s.logged = false;
+    if (err?.code === 'STORE_CONFLICT') toast(learningStoreErrorMessage(err));
   }
   if (state.view === 'review') renderReview();
 }
@@ -1825,7 +1833,7 @@ async function confirmBatchImport() {
     state.batchPreview = null;
   } catch (err) {
     button.disabled = false;
-    $('#batch-import-message').textContent = `导入失败：${err.message}`;
+    $('#batch-import-message').textContent = learningStoreErrorMessage(err, '导入失败');
   }
 }
 
@@ -2881,6 +2889,11 @@ async function saveInlineAiWord(form) {
     if (label) label.textContent = `✓ 已加入 ${card.wordNumber ? `#${card.wordNumber} ` : ''}${card.front}`;
     if (state.ai.mode === 'helper') renderAiHelper();
   } catch (err) {
+    if (err?.code === 'STORE_CONFLICT') {
+      error.hidden = false; error.textContent = learningStoreErrorMessage(err);
+      submit.disabled = false; submit.textContent = '保存到单词库';
+      return;
+    }
     const resolution = FlashArticleUtils.resolveWordCard(state.cards, fields.front);
     const existing = resolution.card || null;
     if (existing) {
@@ -2921,7 +2934,7 @@ async function saveAiMeaningSupplement(form) {
     openAiSentenceWord(word, sentence, { reading: form.dataset.aiReading === 'true' });
     toast('词库释义已更新');
   } catch (err) {
-    error.hidden = false; error.textContent = `保存失败：${err.message}`; save.disabled = false;
+    error.hidden = false; error.textContent = learningStoreErrorMessage(err); save.disabled = false;
   }
 }
 
@@ -3026,6 +3039,7 @@ async function restoreFullBackup(backup) {
     setAiHistorySnapshot(validated.aiLearning);
     usageTracker.replaceStats(validated.usageStats);
   } catch (error) {
+    if (error?.code === 'STORE_CONFLICT') throw error;
     const rollbackErrors = [];
     try { await FlashStore.replaceSnapshot(current.learning); } catch (err) { rollbackErrors.push(err); }
     try { await ArticleStore.replaceSnapshot(current.articles); } catch (err) { rollbackErrors.push(err); }
@@ -3749,7 +3763,7 @@ function bindEvents() {
         await openArticle(returnToArticle);
       }
     } catch (err) {
-      toast(`添加失败： ${err.message}`);
+      toast(learningStoreErrorMessage(err, '添加失败'));
     } finally {
       submit.disabled = false;
     }
@@ -3800,7 +3814,7 @@ function bindEvents() {
       renderDeckControls();
       renderBrowse();
     } catch (err) {
-      toast(`删除失败： ${err.message}`);
+      toast(learningStoreErrorMessage(err, '删除失败'));
     }
   });
 
@@ -3841,7 +3855,7 @@ function bindEvents() {
       toast('已保存');
     } catch (err) {
       $('#edit-toast-slot').appendChild($('#toast'));
-      toast(`保存失败：${err.message}`);
+      toast(learningStoreErrorMessage(err));
     } finally {
       save.disabled = false;
       $('#edit-cancel').disabled = false;
@@ -3867,7 +3881,7 @@ function bindEvents() {
     } catch { /* textarea copy is enough */ }
   });
 
-  $('#import-data').addEventListener('click', () => {
+  $('#import-data').addEventListener('click', async () => {
     if (!FlashStore.importData) return;
     const text = $('#data-json').value.trim();
     if (!text) {
@@ -3875,14 +3889,14 @@ function bindEvents() {
       return;
     }
     try {
-      const summary = FlashStore.importData(text);
+      const summary = await FlashStore.importData(text);
       const summaryLabel = summary
         .replace(/^Merged (\d+) new cards? \((\d+) duplicates? skipped\)\.$/, '已合并 $1 张新卡片（跳过 $2 张重复卡片）。')
         .replace(/^Imported (\d+) cards \(full replace\)\.$/, '已导入 $1 张卡片（替换全部数据）。');
       $('#data-msg').textContent = `${summaryLabel} 正在重新加载…`;
       setTimeout(() => location.reload(), 700);
     } catch (err) {
-      $('#data-msg').textContent = `导入失败： ${err.message}`;
+      $('#data-msg').textContent = learningStoreErrorMessage(err, '导入失败');
     }
   });
 }

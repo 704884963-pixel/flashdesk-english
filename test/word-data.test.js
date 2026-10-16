@@ -271,16 +271,16 @@ test('PWA full backup round trip preserves extras, progress and counter', async 
   const { card } = await h.store.addCard({ ...word(), memoryReading: 'hint', chineseReading: '读法', forms: ['expected'] });
   const backup = h.store.exportData();
   const restored = await harness(t, 'PWA');
-  restored.store.importData(backup);
+  await restored.store.importData(backup);
   assert.deepEqual(restored.read(), h.read());
   await restored.store.deleteCard(card.id);
-  restored.store.importData(JSON.stringify({ cards: [], history: [] }));
+  await restored.store.importData(JSON.stringify({ cards: [], history: [] }));
   assert.equal((await restored.store.addCard(word('new'))).card.wordNumber, 2);
 });
 
 test('PWA list import assigns numbers, preserves readings/forms and skips Word duplicates', async (t) => {
   const h = await harness(t, 'PWA');
-  h.store.importData(JSON.stringify([{ ...word(), memoryReading: 'hint', forms: [' expected ', 'expected'] }, word(' EXPECT ')]));
+  await h.store.importData(JSON.stringify([{ ...word(), memoryReading: 'hint', forms: [' expected ', 'expected'] }, word(' EXPECT ')]));
   assert.equal(h.read().cards.length, 1);
   assert.equal(h.read().cards[0].memoryReading, 'hint');
   assert.deepEqual(h.read().cards[0].forms, ['expected']);
