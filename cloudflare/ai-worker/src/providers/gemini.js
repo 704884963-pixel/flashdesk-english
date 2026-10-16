@@ -41,7 +41,12 @@ export function createGeminiProvider(env, fetchImpl = fetch) {
   return {
     async generate({ messages, model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL, maxOutputTokens, temperature, timeoutMs = 25000 }) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let rejectDeadline;
+      const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+      const timer = setTimeout(() => {
+        controller.abort();
+        rejectDeadline(new ProviderError('Gemini request deadline exceeded', { code: 'PROVIDER_RESULT_UNKNOWN', outcomeUnknown: true }));
+      }, timeoutMs);
       const { systemText, contents } = geminiMessages(messages || []);
       const generationConfig = { responseMimeType: 'application/json' };
       if (Number.isFinite(maxOutputTokens)) generationConfig.maxOutputTokens = maxOutputTokens;
@@ -53,35 +58,41 @@ export function createGeminiProvider(env, fetchImpl = fetch) {
       let response;
       try {
         try {
-          response = await fetchImpl(`${GEMINI_API_ROOT}/${encodeURIComponent(model)}:generateContent`, {
+          response = await Promise.race([fetchImpl(`${GEMINI_API_ROOT}/${encodeURIComponent(model)}:generateContent`, {
             method: 'POST',
             signal: controller.signal,
             headers: { 'x-goog-api-key': env.GEMINI_API_KEY, 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
-          });
+          }), deadline]);
         } catch (error) {
-          if (error?.name === 'AbortError') throw error;
-          throw new ProviderError('Gemini network request failed', { networkFailure: true, cause: error });
+          if (error?.outcomeUnknown) throw error;
+          throw new ProviderError('Gemini network request failed', { code: 'PROVIDER_RESULT_UNKNOWN', networkFailure: true, outcomeUnknown: true, cause: error });
         }
+        if (!response.ok) throw new ProviderError('Gemini upstream request failed', { status: response.status });
+        let raw;
+        try { raw = await Promise.race([response.text(), deadline]); }
+        catch (error) {
+          if (error?.outcomeUnknown) throw error;
+          throw new ProviderError('Gemini response body failed', { code: 'PROVIDER_RESULT_UNKNOWN', outcomeUnknown: true, cause: error });
+        }
+        let payload;
+        try { payload = JSON.parse(raw); }
+        catch (error) { throw new ProviderError('Gemini returned malformed JSON', { code: 'PROVIDER_RESULT_UNKNOWN', outcomeUnknown: true, cause: error }); }
+        if (isBlocked(payload)) throw new ProviderError('Gemini response was blocked', { code: 'PROVIDER_BLOCKED' });
+        const content = responseText(payload);
+        if (!content) throw new ProviderError('Gemini returned no text', { code: 'INVALID_PROVIDER_RESPONSE' });
+        const usage = payload?.usageMetadata || {};
+        return {
+          content,
+          usage: {
+            inputTokens: Number.isFinite(usage.promptTokenCount) ? usage.promptTokenCount : null,
+            outputTokens: Number.isFinite(usage.candidatesTokenCount) ? usage.candidatesTokenCount : null,
+            totalTokens: Number.isFinite(usage.totalTokenCount) ? usage.totalTokenCount : null,
+          },
+        };
       } finally {
         clearTimeout(timer);
       }
-      if (!response.ok) throw new ProviderError('Gemini upstream request failed', { status: response.status });
-      let payload;
-      try { payload = await response.json(); }
-      catch (error) { throw new ProviderError('Gemini returned malformed JSON', { code: 'INVALID_PROVIDER_RESPONSE', cause: error }); }
-      if (isBlocked(payload)) throw new ProviderError('Gemini response was blocked', { code: 'PROVIDER_BLOCKED' });
-      const content = responseText(payload);
-      if (!content) throw new ProviderError('Gemini returned no text', { code: 'INVALID_PROVIDER_RESPONSE' });
-      const usage = payload?.usageMetadata || {};
-      return {
-        content,
-        usage: {
-          inputTokens: Number.isFinite(usage.promptTokenCount) ? usage.promptTokenCount : null,
-          outputTokens: Number.isFinite(usage.candidatesTokenCount) ? usage.candidatesTokenCount : null,
-          totalTokens: Number.isFinite(usage.totalTokenCount) ? usage.totalTokenCount : null,
-        },
-      };
     },
   };
 }

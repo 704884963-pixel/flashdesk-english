@@ -191,7 +191,7 @@ test('generate_sentences disables Zhipu thinking without changing its other requ
   let payload;
   await createZhipuProvider(env, async (_url, init) => { payload = JSON.parse(init.body); return (await upstream('{}'))(); }).generate({ messages: [], task: 'generate_sentences', ...generationOptions('generate_sentences', { ...env, AI_LOOKUP_MODEL: 'fast-lookup-model' }) });
   assert.equal(payload.model, env.AI_MODEL);
-  assert.equal('max_tokens' in payload, false);
+  assert.equal(payload.max_tokens, 800);
   assert.equal('temperature' in payload, false);
   assert.deepEqual(payload.thinking, { type: 'disabled' });
 });
@@ -213,21 +213,21 @@ test('Gemini HTTP 429 maps to RATE_LIMITED without exposing the upstream body', 
   assert.doesNotMatch(JSON.stringify(body), /private upstream error|gemini-test-only/);
 });
 test('upstream 5xx maps to UPSTREAM_ERROR', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream('', 500)); assert.equal((await r.json()).error.code, 'UPSTREAM_ERROR'); });
-test('Gemini 5xx and network failures reuse the existing one-retry limit', async () => {
+test('Gemini retries one explicit 5xx but never retries an unknown network outcome', async () => {
   const { handleRequest } = await load('index.js'); let statusCalls = 0; let networkCalls = 0;
   const statusResponse = await handleRequest(request('generate_sentences', {}, 'gemini'), geminiEnv, async () => { statusCalls += 1; return (await geminiUpstream('', 503))(); }, undefined, Date.now, async () => {});
   const networkResponse = await handleRequest(request('generate_sentences', {}, 'gemini'), geminiEnv, async () => { networkCalls += 1; throw new Error('private network detail'); }, undefined, Date.now, async () => {});
-  assert.equal(statusCalls, 2); assert.equal(networkCalls, 2);
+  assert.equal(statusCalls, 2); assert.equal(networkCalls, 1);
   assert.equal((await statusResponse.json()).error.code, 'UPSTREAM_ERROR');
   assert.equal((await networkResponse.json()).error.code, 'UPSTREAM_ERROR');
 });
-test('timeout retries once and maps the final failure to TIMEOUT', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const abort = async () => { calls += 1; const e = new Error('aborted'); e.name = 'AbortError'; throw e; }; const r = await handleRequest(request('generate_sentences'), env, abort, undefined, Date.now, async () => {}); assert.equal(calls, 2); assert.equal((await r.json()).error.code, 'TIMEOUT'); });
-test('network failure retries once and can succeed on the second attempt', async () => {
+test('an abort after dispatch is unknown and is not automatically retried', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const abort = async () => { calls += 1; const e = new Error('aborted'); e.name = 'AbortError'; throw e; }; const r = await handleRequest(request('generate_sentences'), env, abort, undefined, Date.now, async () => {}); const body = await r.json(); assert.equal(calls, 1); assert.equal(body.error.code, 'UPSTREAM_ERROR'); assert.equal(body.attemptCount, 1); assert.equal(body.usageKnown, false); });
+test('network failure after dispatch is unknown and cannot trigger a second paid attempt', async () => {
   const { handleRequest } = await load('index.js'); let calls = 0;
   const fetchImpl = async () => { calls += 1; if (calls === 1) throw new TypeError('network failed'); return (await upstream(JSON.stringify(sentenceData)))(); };
   const r = await handleRequest(request('generate_sentences'), env, fetchImpl, undefined, Date.now, async () => {});
-  const body = await r.json(); assert.equal(calls, 2); assert.equal(body.ok, true);
-  assert.equal(body.timing.providerCalls, 2); assert.equal(body.timing.networkRetries, 1); assert.equal(body.timing.lengthRewrite, false);
+  const body = await r.json(); assert.equal(calls, 1); assert.equal(body.ok, false);
+  assert.equal(body.attemptCount, 1); assert.equal(body.timing.networkRetries, 0); assert.equal(body.attemptsSummary[0].status, 'unknown');
 });
 for (const status of [502, 503, 504]) test(`HTTP ${status} retries once`, async () => {
   const { handleRequest } = await load('index.js'); let calls = 0;
@@ -240,7 +240,7 @@ test('HTTP 401 is not retried', async () => { const { handleRequest } = await lo
 test('HTTP 403 is not retried', async () => { const { handleRequest } = await load('index.js'); let calls = 0; await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('', 403))(); }, undefined, Date.now, async () => {}); assert.equal(calls, 1); });
 test('HTTP 404 is not retried', async () => { const { handleRequest } = await load('index.js'); let calls = 0; await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('', 404))(); }, undefined, Date.now, async () => {}); assert.equal(calls, 1); });
 test('request and schema errors are classified as non-retryable', async () => { const { isRetryableProviderError } = await load('index.js'); assert.equal(isRetryableProviderError({ code: 'INVALID_REQUEST' }), false); assert.equal(isRetryableProviderError({ code: 'INVALID_AI_OUTPUT' }), false); });
-test('INVALID_AI_OUTPUT is not retried', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('bad'))(); }, undefined, Date.now, async () => {}); assert.equal(calls, 1); assert.equal((await r.json()).error.code, 'INVALID_AI_OUTPUT'); });
+test('INVALID_AI_OUTPUT receives at most one counted format repair', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('bad'))(); }, undefined, Date.now, async () => {}); const body = await r.json(); assert.equal(calls, 2); assert.equal(body.error.code, 'INVALID_AI_OUTPUT'); assert.deepEqual(body.attemptsSummary.map((item) => item.reason), ['initial', 'format_repair']); });
 test('retry stops after two total attempts', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('', 503))(); }, undefined, Date.now, async () => {}); assert.equal(calls, 2); assert.equal((await r.json()).error.code, 'UPSTREAM_ERROR'); });
 test('retry reuses the exact same provider request content', async () => {
   const { handleRequest } = await load('index.js'); const bodies = [];
@@ -394,8 +394,106 @@ test('retried lookup timing reports cumulative provider duration and one network
   const r = await handleRequest(request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }), env, fetchImpl, undefined, () => moments.shift(), async () => {});
   const body = await r.json(); assert.deepEqual(body.timing, { providerTotalMs: 225, providerCalls: 2, networkRetries: 1, lengthRewrite: false }); assert.doesNotMatch(JSON.stringify(body.timing), /test-only|app-test|ZHIPU|TOKEN|KEY/i);
 });
-test('invalid lookup_word output is not retried', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }), env, async () => { calls += 1; return (await upstream(JSON.stringify({ ...lookupData, meaningZh: '' })))(); }, undefined, Date.now, async () => {}); assert.equal(calls, 1); assert.equal((await r.json()).error.code, 'INVALID_AI_OUTPUT'); });
+test('invalid lookup_word output receives one bounded format repair', async () => { const { handleRequest } = await load('index.js'); let calls = 0; const r = await handleRequest(request('lookup_word', { word: 'evaluation', sentence: 'The evaluation was useful.' }), env, async () => { calls += 1; return (await upstream(JSON.stringify({ ...lookupData, meaningZh: '' })))(); }, undefined, Date.now, async () => {}); const body = await r.json(); assert.equal(calls, 2); assert.equal(body.error.code, 'INVALID_AI_OUTPUT'); assert.equal(body.attemptCount, 2); });
 test('usage is mapped to provider-neutral names', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData))); assert.deepEqual((await r.json()).usage, { inputTokens: 12, outputTokens: 8, totalTokens: 20 }); });
+test('one successful provider call reports exact aggregate usage and one attempt', async () => {
+  const { handleRequest } = await load('index.js');
+  const response = await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData), 200, { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 }));
+  const body = await response.json();
+  assert.deepEqual(body.usage, { inputTokens: 4, outputTokens: 6, totalTokens: 10 });
+  assert.equal(body.usageKnown, true); assert.equal(body.attemptCount, 1);
+  assert.deepEqual(body.attemptsSummary.map(({ reason, status }) => ({ reason, status })), [{ reason: 'initial', status: 'success' }]);
+});
+test('format repair aggregates 10 plus 20 tokens instead of returning only the last usage', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return (await upstream(calls === 1 ? 'not-json' : JSON.stringify(sentenceData), 200,
+      calls === 1 ? { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 } : { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 }))();
+  };
+  const body = await (await handleRequest(request('generate_sentences'), env, fetchImpl)).json();
+  assert.equal(body.attemptCount, 2); assert.equal(body.usageKnown, true);
+  assert.deepEqual(body.usage, { inputTokens: 12, outputTokens: 18, totalTokens: 30 });
+  assert.deepEqual(body.attemptsSummary.map((item) => item.reason), ['initial', 'format_repair']);
+});
+test('missing usage is explicit and is never presented as an exact zero', async () => {
+  const { handleRequest } = await load('index.js');
+  const body = await (await handleRequest(request('generate_sentences'), env, upstream(JSON.stringify(sentenceData), 200, {}))).json();
+  assert.equal(body.usageKnown, false);
+  assert.deepEqual(body.usage, { inputTokens: null, outputTokens: null, totalTokens: null });
+});
+test('local request validation failure has zero provider attempts', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const body = await (await handleRequest(request('not-a-task'), env, async () => { calls += 1; })).json();
+  assert.equal(calls, 0); assert.equal(body.attemptCount, 0);
+});
+test('pronunciation correction usage is included in aggregate attempts', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const incomplete = { ...lookupData, memoryReading: '', chineseReading: '' };
+  const fetchImpl = async () => {
+    calls += 1;
+    return (await upstream(JSON.stringify(calls === 1 ? incomplete : lookupData), 200,
+      calls === 1 ? { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 } : { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 }))();
+  };
+  const body = await (await handleRequest(request('lookup_word', { word: 'evaluation', sentence: '' }), env, fetchImpl)).json();
+  assert.equal(body.attemptCount, 2); assert.equal(body.usage.totalTokens, 30);
+  assert.deepEqual(body.attemptsSummary.map((item) => item.reason), ['initial', 'pronunciation_repair']);
+});
+test('all text tasks have centralized output token and total attempt budgets', async () => {
+  const { TASK_OUTPUT_TOKEN_LIMITS, TASK_ATTEMPT_LIMITS, generationOptions } = await load('index.js');
+  assert.deepEqual(TASK_OUTPUT_TOKEN_LIMITS, { generate_sentences: 800, generate_article: 2400, translate_article: 2000, lookup_word: 480, english_helper: 520 });
+  assert.deepEqual(TASK_ATTEMPT_LIMITS, { generate_sentences: 3, generate_article: 2, translate_article: 2, lookup_word: 3, english_helper: 2 });
+  for (const [task, limit] of Object.entries(TASK_OUTPUT_TOKEN_LIMITS)) assert.equal(generationOptions(task, env).maxOutputTokens, limit);
+});
+test('Zhipu and Gemini map the shared Article output limit to provider-specific fields', async () => {
+  const { generationOptions } = await load('index.js');
+  const { createZhipuProvider } = await load('providers/zhipu.js');
+  const { createGeminiProvider } = await load('providers/gemini.js');
+  let zhipuBody; let geminiBody;
+  await createZhipuProvider(env, async (_url, init) => { zhipuBody = JSON.parse(init.body); return (await upstream('{}'))(); })
+    .generate({ messages: [], task: 'generate_article', ...generationOptions('generate_article', env) });
+  await createGeminiProvider(geminiEnv, async (_url, init) => { geminiBody = JSON.parse(init.body); return (await geminiUpstream('{}'))(); })
+    .generate({ messages: [], task: 'generate_article', ...generationOptions('generate_article', geminiEnv, 'gemini') });
+  assert.equal(zhipuBody.max_tokens, 2400);
+  assert.equal(geminiBody.generationConfig.maxOutputTokens, 2400);
+});
+for (const status of [401, 402, 429]) test(`HTTP ${status} never triggers an automatic retry`, async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const body = await (await handleRequest(request('generate_sentences'), env, async () => { calls += 1; return (await upstream('', status))(); }, undefined, Date.now, async () => {})).json();
+  assert.equal(calls, 1); assert.equal(body.attemptCount, 1);
+});
+test('503 then success uses exactly two attempts and marks unknown usage without guessing', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const fetchImpl = async () => { calls += 1; return calls === 1 ? (await upstream('', 503))() : (await upstream(JSON.stringify(sentenceData), 200, { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 }))(); };
+  const body = await (await handleRequest(request('generate_sentences'), env, fetchImpl, undefined, Date.now, async () => {})).json();
+  assert.equal(calls, 2); assert.equal(body.attemptCount, 2); assert.equal(body.timing.networkRetries, 1);
+  assert.equal(body.usageKnown, false); assert.deepEqual(body.attemptsSummary.map((item) => item.status), ['http_error', 'success']);
+});
+test('response body disconnect is unknown and never automatically retried', async () => {
+  const { handleRequest } = await load('index.js'); let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: true, status: 200, text: async () => { throw new Error('stream disconnected'); } }; };
+  const body = await (await handleRequest(request('generate_sentences'), env, fetchImpl, undefined, Date.now, async () => {})).json();
+  assert.equal(calls, 1); assert.equal(body.attemptCount, 1); assert.equal(body.usageKnown, false);
+  assert.equal(body.attemptsSummary[0].status, 'unknown');
+});
+test('headers followed by a body deadline returns timeout with one attempt and no automatic retry', async () => {
+  const { handleRequest, generationOptions } = await load('index.js'); let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: true, status: 200, text: () => new Promise(() => {}) }; };
+  const optionsFactory = (task, currentEnv, provider) => ({ ...generationOptions(task, currentEnv, provider), timeoutMs: 5 });
+  const body = await (await handleRequest(request('generate_sentences'), env, fetchImpl, undefined, Date.now, async () => {}, optionsFactory)).json();
+  assert.equal(body.error.code, 'TIMEOUT'); assert.equal(calls, 1); assert.equal(body.attemptCount, 1);
+  assert.equal(body.timing.providerCalls, 1); assert.equal(body.timing.networkRetries, 0);
+  assert.equal(body.attemptsSummary[0].status, 'unknown');
+});
+for (const [name, file, factory, providerEnv] of [
+  ['Zhipu', 'providers/zhipu.js', 'createZhipuProvider', env],
+  ['Gemini', 'providers/gemini.js', 'createGeminiProvider', geminiEnv],
+]) test(`${name} deadline covers delayed response body reads`, async () => {
+  const module = await load(file); let calls = 0;
+  const provider = module[factory](providerEnv, async () => { calls += 1; return { ok: true, status: 200, text: () => new Promise(() => {}) }; });
+  await assert.rejects(() => provider.generate({ messages: [], timeoutMs: 5 }), (error) => error?.outcomeUnknown === true && /deadline/i.test(error.message));
+  assert.equal(calls, 1);
+});
 test('request cannot override provider configuration', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('generate_sentences', { provider: 'evil' }), env, upstream('{}')); assert.equal((await r.json()).error.code, 'INVALID_REQUEST'); });
 test('client model variants are no longer accepted', async () => { const { validateClientRequest } = await load('validation.js'); const context = { targetWords: [] }; assert.throws(() => validateClientRequest({ task: 'generate_sentences', context, options: { variant: 'base' } })); assert.throws(() => validateClientRequest({ task: 'generate_article', context, options: { variant: 'experiment' } })); });
 test('valid Article translation uses the configured translation model and standard safe response', async () => { const { handleRequest } = await load('index.js'); const r = await handleRequest(request('translate_article', { title: 'A Useful Strategy', paragraphs: ['First.', 'Second.'] }), { ...env, AI_TRANSLATION_MODEL: 'translation-model' }, upstream(JSON.stringify(translationData))); const body = await r.json(); assert.equal(body.model, 'translation-model'); assert.deepEqual(body.data, translationData); assert.equal(body.timing.providerCalls, 1); assert.doesNotMatch(JSON.stringify(body), /test-only|app-test|authorization|zhipu_api_key|flashdesk_ai_token/i); });
