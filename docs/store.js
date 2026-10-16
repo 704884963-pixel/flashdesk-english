@@ -97,12 +97,12 @@
     };
   }
 
-  function nextWordNumber() {
+  function nextWordNumber(state = data) {
     let max = 0;
-    for (const card of data.cards) {
+    for (const card of state.cards) {
       if (Number.isSafeInteger(card.wordNumber) && card.wordNumber > max) max = card.wordNumber;
     }
-    const saved = data.meta?.nextWordNumber;
+    const saved = state.meta?.nextWordNumber;
     const next = Math.max(max + 1, Number.isSafeInteger(saved) && saved > 0 ? saved : 1);
     if (!Number.isSafeInteger(next) || !Number.isSafeInteger(next + 1)) {
       throw new Error('单词编号已超出安全范围');
@@ -110,34 +110,34 @@
     return next;
   }
 
-  function prepareWord(fields) {
+  function prepareWord(fields, state = data) {
     if (typeof fields.front !== 'string' || !fields.front.trim()
         || typeof fields.back !== 'string' || !fields.back.trim()) {
       throw new Error('英文单词和中文意思必须是非空字符串');
     }
     const front = fields.front.trim();
-    if (data.cards.some((card) => card.deck === 'Words'
+    if (state.cards.some((card) => card.deck === 'Words'
         && card.front.trim().toLowerCase() === front.toLowerCase())) {
       throw new Error('该单词已存在，请勿重复添加');
     }
-    return { ...wordFields(fields), wordNumber: nextWordNumber() };
+    return { ...wordFields(fields), wordNumber: nextWordNumber(state) };
   }
 
-  function addCardInMemory(fields) {
+  function addCardInMemory(state, fields) {
     const deck = String(fields?.deck || '').trim();
-    const extra = deck === 'Words' ? prepareWord(fields) : {};
+    const extra = deck === 'Words' ? prepareWord(fields, state) : {};
     const front = String(fields?.front || '').trim();
     const back = String(fields?.back || '').trim();
     if (!front || !back || !deck) throw new Error('front, back, and deck are all required');
     const card = { ...toCard({ front, back, deck }), ...extra };
-    if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
-    data.cards.push(card);
+    if (deck === 'Words') state.meta = { ...state.meta, nextWordNumber: card.wordNumber + 1 };
+    state.cards.push(card);
     return card;
   }
 
-  function editableWordFields(card, fields) {
+  function editableWordFields(state, card, fields) {
     if (card.deck !== 'Words') return {};
-    if (data.cards.some((other) => other.id !== card.id && other.deck === 'Words'
+    if (state.cards.some((other) => other.id !== card.id && other.deck === 'Words'
         && other.front.trim().toLowerCase() === fields.front.trim().toLowerCase())) {
       throw new Error('该单词已存在，请勿重复添加');
     }
@@ -149,13 +149,20 @@
     return changes;
   }
 
-  function persist() {
+  function persist(value = data) {
     // Throws on quota/private-mode failures so callers surface the existing
     // "Save failed" / "Could not save" paths instead of losing data silently.
-    localStorage.setItem(KEY, JSON.stringify(data));
+    localStorage.setItem(KEY, JSON.stringify(value));
   }
-  function findCard(id) {
-    const card = data.cards.find((c) => c.id === id);
+  function commitMutation(mutator) {
+    const draft = clone(data);
+    const result = mutator(draft);
+    persist(draft);
+    data = draft;
+    return result;
+  }
+  function findCard(id, state = data) {
+    const card = state.cards.find((c) => c.id === id);
     if (!card) throw new Error('card not found');
     return card;
   }
@@ -178,39 +185,26 @@
     async replaceSnapshot(snapshot) {
       await ensureReady();
       if (!validData(snapshot)) throw new Error('学习数据格式无效');
-      const previous = data;
-      data = clone(snapshot);
-      try { persist(); }
-      catch (err) { data = previous; throw err; }
+      const replacement = clone(snapshot);
+      persist(replacement);
+      data = replacement;
       return this.load();
     },
 
     async addCard(fields) {
       await ensureReady();
-      const previous = data;
-      data = clone(data);
-      let card;
-      try {
-        card = addCardInMemory(fields);
-        persist();
-      }
-      catch (err) {
-        data = previous;
-        throw err;
-      }
+      const card = commitMutation((draft) => addCardInMemory(draft, fields));
       return { card: clone(card) };
     },
 
     async importBatch(items) {
       await ensureReady();
       if (!Array.isArray(items)) throw new Error('items must be an array');
-      const previous = data;
-      data = clone(data);
-      const cards = [];
-      let addedWords = 0;
-      let addedSentences = 0;
-      let skipped = 0;
-      try {
+      const result = commitMutation((draft) => {
+        const cards = [];
+        let addedWords = 0;
+        let addedSentences = 0;
+        let skipped = 0;
         for (const fields of items) {
           const deck = String(fields?.deck || '').trim();
           if (deck !== 'Words' && deck !== 'Sentences') throw new Error('batch items must be Words or Sentences');
@@ -218,21 +212,19 @@
           const back = typeof fields.back === 'string' ? fields.back.trim() : '';
           if (!front || !back) throw new Error('front and back must be non-empty strings');
           const duplicate = deck === 'Words'
-            ? data.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
-            : data.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
+            ? draft.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
+            : draft.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
           if (duplicate) { skipped += 1; continue; }
-          const card = addCardInMemory({ ...fields, front, back, deck });
+          const card = addCardInMemory(draft, { ...fields, front, back, deck });
           cards.push(card);
           if (deck === 'Words') addedWords += 1;
           else addedSentences += 1;
         }
-        persist();
-      } catch (err) {
-        data = previous;
-        throw err;
-      }
+        return { cards, addedWords, addedSentences, skipped };
+      });
       return {
-        cards: clone(cards), addedWords, addedSentences, skipped,
+        cards: clone(result.cards), addedWords: result.addedWords,
+        addedSentences: result.addedSentences, skipped: result.skipped,
         ...(data.meta ? { meta: clone(data.meta) } : {}),
       };
     },
@@ -240,60 +232,60 @@
     async updateCard(id, fields) {
       await ensureReady();
       const { front, back } = fields;
-      const card = findCard(id);
       if (typeof front !== 'string' || !front.trim()
           || typeof back !== 'string' || !back.trim()) {
         throw new Error('front and back must be non-empty strings');
       }
-      const changes = editableWordFields(card, fields);
-      const previous = { ...card };
-      card.front = front.trim();
-      card.back = back.trim();
-      for (const key of Object.keys(changes)) card[key] = changes[key];
-      try {
-        persist();
-      } catch (err) {
-        for (const key of Object.keys(changes)) delete card[key];
-        Object.assign(card, previous);
-        throw err;
-      }
+      const card = commitMutation((draft) => {
+        const draftCard = findCard(id, draft);
+        const changes = editableWordFields(draft, draftCard, fields);
+        draftCard.front = front.trim();
+        draftCard.back = back.trim();
+        for (const key of Object.keys(changes)) draftCard[key] = changes[key];
+        return draftCard;
+      });
       return { card: clone(card) };
     },
 
     async gradeCard(id, grade) {
       await ensureReady();
-      const card = findCard(id);
-      window.FlashLogic.gradeReviewCard(card, grade);
-      persist();
+      const card = commitMutation((draft) => {
+        const draftCard = findCard(id, draft);
+        window.FlashLogic.gradeReviewCard(draftCard, grade);
+        return draftCard;
+      });
       return { card: clone(card) };
     },
 
     async deleteCard(id) {
       await ensureReady();
-      const card = data.cards.find((c) => c.id === id);
-      if (card && Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0) {
-        data.meta = { ...data.meta, nextWordNumber: nextWordNumber() };
-      }
-      data.cards = data.cards.filter((c) => c.id !== id);
-      persist();
+      commitMutation((draft) => {
+        const card = draft.cards.find((c) => c.id === id);
+        if (card && Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0) {
+          draft.meta = { ...draft.meta, nextWordNumber: nextWordNumber(draft) };
+        }
+        draft.cards = draft.cards.filter((c) => c.id !== id);
+      });
       return { ok: true };
     },
 
     async logSession({ deck, reviewed, correct, easy = 0, remember = Math.max(0, correct - easy), again = 0 }) {
       await ensureReady();
-      data.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
-      persist();
+      commitMutation((draft) => {
+        draft.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
+      });
       return { ok: true, logged: true };
     },
 
     async logQuiz({ missedIds }) {
       await ensureReady();
-      const now = Date.now();
-      for (const id of missedIds || []) {
-        const card = data.cards.find((c) => c.id === id);
-        if (card && card.due > now) card.due = now; // back in the review queue; stats untouched
-      }
-      persist();
+      commitMutation((draft) => {
+        const now = Date.now();
+        for (const id of missedIds || []) {
+          const card = draft.cards.find((c) => c.id === id);
+          if (card && card.due > now) card.due = now; // back in the review queue; stats untouched
+        }
+      });
       return { ok: true, logged: true };
     },
 
@@ -325,27 +317,23 @@
       if (Array.isArray(parsed)) {
         // Bare card list -> merge as fresh cards, skip duplicates by front+deck.
         if (!parsed.every(validCard)) throw new Error('every card needs front, back, and deck');
-        const seen = new Set(data.cards.map((c) => `${c.front} ${c.deck}`));
-        let added = 0;
-        const previous = clone(data);
-        try {
+        const added = commitMutation((draft) => {
+          const seen = new Set(draft.cards.map((c) => `${c.front} ${c.deck}`));
+          let count = 0;
           for (const c of parsed) {
             const key = `${c.front} ${c.deck}`;
             if (seen.has(key)) continue;
             seen.add(key);
             const fields = { ...c, front: c.front.trim(), back: c.back.trim(), deck: c.deck.trim() };
-            if (fields.deck === 'Words' && data.cards.some((card) => card.deck === 'Words'
+            if (fields.deck === 'Words' && draft.cards.some((card) => card.deck === 'Words'
                 && card.front.trim().toLowerCase() === fields.front.toLowerCase())) continue;
-            const extra = fields.deck === 'Words' ? prepareWord(fields) : {};
-            data.cards.push({ ...toCard(fields), ...extra });
-            if (fields.deck === 'Words') data.meta = { ...data.meta, nextWordNumber: extra.wordNumber + 1 };
-            added += 1;
+            const extra = fields.deck === 'Words' ? prepareWord(fields, draft) : {};
+            draft.cards.push({ ...toCard(fields), ...extra });
+            if (fields.deck === 'Words') draft.meta = { ...draft.meta, nextWordNumber: extra.wordNumber + 1 };
+            count += 1;
           }
-          persist();
-        } catch (err) {
-          data = previous;
-          throw err;
-        }
+          return count;
+        });
         return `Merged ${added} new card${added === 1 ? '' : 's'} (${parsed.length - added} duplicate${parsed.length - added === 1 ? '' : 's'} skipped).`;
       }
 
@@ -353,8 +341,7 @@
         // Full export -> replace everything, keeping review state when present.
         if (!parsed.cards.every(validCard)) throw new Error('every card needs front, back, and deck');
         const now = Date.now();
-        const previous = data;
-        const highWater = nextWordNumber();
+        const highWater = nextWordNumber(data);
         const replacement = {
           ...(Number.isSafeInteger(parsed.schemaVersion)
             ? { schemaVersion: parsed.schemaVersion }
@@ -384,15 +371,10 @@
                 ? parsed.meta.nextWordNumber : 1),
           },
         };
+        replacement.meta.nextWordNumber = nextWordNumber(replacement);
+        persist(replacement);
         data = replacement;
-        try {
-          data.meta.nextWordNumber = nextWordNumber();
-          persist();
-        } catch (err) {
-          data = previous;
-          throw err;
-        }
-        return `Imported ${data.cards.length} cards (full replace).`;
+        return `Imported ${replacement.cards.length} cards (full replace).`;
       }
 
       throw new Error('expected a full export or a list of {front, back, deck} cards');

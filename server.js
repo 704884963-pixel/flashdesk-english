@@ -54,12 +54,12 @@ function wordFields(fields) {
   };
 }
 
-function nextWordNumber() {
+function nextWordNumber(state = data) {
   let max = 0;
-  for (const card of data.cards) {
+  for (const card of state.cards) {
     if (Number.isSafeInteger(card.wordNumber) && card.wordNumber > max) max = card.wordNumber;
   }
-  const saved = data.meta?.nextWordNumber;
+  const saved = state.meta?.nextWordNumber;
   const next = Math.max(max + 1, Number.isSafeInteger(saved) && saved > 0 ? saved : 1);
   if (!Number.isSafeInteger(next) || !Number.isSafeInteger(next + 1)) {
     throw new Error('单词编号已超出安全范围');
@@ -67,37 +67,37 @@ function nextWordNumber() {
   return next;
 }
 
-function prepareWord(fields) {
+function prepareWord(fields, state = data) {
   if (typeof fields.front !== 'string' || !fields.front.trim()
       || typeof fields.back !== 'string' || !fields.back.trim()) {
     throw new Error('英文单词和中文意思必须是非空字符串');
   }
   const front = fields.front.trim();
-  if (data.cards.some((card) => card.deck === 'Words'
+  if (state.cards.some((card) => card.deck === 'Words'
       && card.front.trim().toLowerCase() === front.toLowerCase())) {
     throw new Error('该单词已存在，请勿重复添加');
   }
-  return { ...wordFields(fields), wordNumber: nextWordNumber() };
+  return { ...wordFields(fields), wordNumber: nextWordNumber(state) };
 }
 
-function addCardInMemory(fields) {
+function addCardInMemory(state, fields) {
   const deck = String(fields?.deck || '').trim();
-  const extra = deck === 'Words' ? prepareWord(fields) : {};
+  const extra = deck === 'Words' ? prepareWord(fields, state) : {};
   const front = String(fields?.front || '').trim();
   const back = String(fields?.back || '').trim();
   if (!front || !back || !deck) throw new Error('front, back, and deck are all required');
   const card = toCard({ front, back, deck });
   if (deck === 'Words') Object.assign(card, extra);
-  if (deck === 'Words') data.meta = { ...data.meta, nextWordNumber: card.wordNumber + 1 };
-  data.cards.push(card);
+  if (deck === 'Words') state.meta = { ...state.meta, nextWordNumber: card.wordNumber + 1 };
+  state.cards.push(card);
   return card;
 }
 
 const cloneData = (value) => JSON.parse(JSON.stringify(value));
 
-function editableWordFields(card, fields) {
+function editableWordFields(state, card, fields) {
   if (card.deck !== 'Words') return {};
-  if (data.cards.some((other) => other.id !== card.id && other.deck === 'Words'
+  if (state.cards.some((other) => other.id !== card.id && other.deck === 'Words'
       && other.front.trim().toLowerCase() === fields.front.trim().toLowerCase())) {
     throw new Error('该单词已存在，请勿重复添加');
   }
@@ -109,9 +109,17 @@ function editableWordFields(card, fields) {
   return changes;
 }
 
-function saveData() {
-  fs.writeFileSync(DATA_FILE + '.tmp', JSON.stringify(data, null, 2));
+function saveData(value = data) {
+  fs.writeFileSync(DATA_FILE + '.tmp', JSON.stringify(value, null, 2));
   fs.renameSync(DATA_FILE + '.tmp', DATA_FILE);
+}
+
+function commitDataMutation(mutator) {
+  const draft = cloneData(data);
+  const result = mutator(draft);
+  saveData(draft);
+  data = draft;
+  return result;
 }
 
 function loadData() {
@@ -287,10 +295,8 @@ async function handleApi(req, res, pathname) {
     let replacement;
     try { replacement = validateLearningSnapshot(body); }
     catch (err) { return sendJSON(res, 400, { error: err.message }); }
-    const previous = data;
+    saveData(replacement);
     data = replacement;
-    try { saveData(); }
-    catch (err) { data = previous; throw err; }
     return sendJSON(res, 200, cloneData(data));
   }
 
@@ -382,101 +388,96 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
-    const previous = data;
-    data = cloneData(data);
     let card;
     try {
-      card = addCardInMemory(body);
-      saveData();
+      card = commitDataMutation((draft) => addCardInMemory(draft, body));
     }
-    catch (err) {
-      data = previous;
-      return sendJSON(res, 400, { error: err.message });
-    }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
     return sendJSON(res, 201, { card });
   }
 
   if (req.method === 'POST' && pathname === '/api/cards/batch') {
     const body = await readBody(req);
     if (!body || !Array.isArray(body.items)) return sendJSON(res, 400, { error: 'items must be an array' });
-    const previous = data;
-    data = cloneData(data);
-    const cards = [];
-    let addedWords = 0;
-    let addedSentences = 0;
-    let skipped = 0;
+    let result;
     try {
-      for (const fields of body.items) {
-        const deck = String(fields?.deck || '').trim();
-        if (deck !== 'Words' && deck !== 'Sentences') throw new Error('batch items must be Words or Sentences');
-        const front = typeof fields.front === 'string' ? fields.front.trim() : '';
-        const back = typeof fields.back === 'string' ? fields.back.trim() : '';
-        if (!front || !back) throw new Error('front and back must be non-empty strings');
-        const duplicate = deck === 'Words'
-          ? data.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
-          : data.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
-        if (duplicate) { skipped += 1; continue; }
-        const card = addCardInMemory({ ...fields, front, back, deck });
-        cards.push(card);
-        if (deck === 'Words') addedWords += 1;
-        else addedSentences += 1;
-      }
-      saveData();
-    } catch (err) {
-      data = previous;
-      return sendJSON(res, 400, { error: err.message });
-    }
+      result = commitDataMutation((draft) => {
+        const cards = [];
+        let addedWords = 0;
+        let addedSentences = 0;
+        let skipped = 0;
+        for (const fields of body.items) {
+          const deck = String(fields?.deck || '').trim();
+          if (deck !== 'Words' && deck !== 'Sentences') throw new Error('batch items must be Words or Sentences');
+          const front = typeof fields.front === 'string' ? fields.front.trim() : '';
+          const back = typeof fields.back === 'string' ? fields.back.trim() : '';
+          if (!front || !back) throw new Error('front and back must be non-empty strings');
+          const duplicate = deck === 'Words'
+            ? draft.cards.some((card) => card.deck === 'Words' && card.front.trim().toLowerCase() === front.toLowerCase())
+            : draft.cards.some((card) => card.deck === 'Sentences' && card.front.trim() === front);
+          if (duplicate) { skipped += 1; continue; }
+          const card = addCardInMemory(draft, { ...fields, front, back, deck });
+          cards.push(card);
+          if (deck === 'Words') addedWords += 1;
+          else addedSentences += 1;
+        }
+        return { cards, addedWords, addedSentences, skipped };
+      });
+    } catch (err) { return sendJSON(res, 400, { error: err.message }); }
     return sendJSON(res, 201, {
-      cards, addedWords, addedSentences, skipped,
+      cards: result.cards, addedWords: result.addedWords,
+      addedSentences: result.addedSentences, skipped: result.skipped,
       ...(data.meta ? { meta: data.meta } : {}),
     });
   }
 
   if (req.method === 'POST' && pathname === '/api/cards/grade') {
     const body = await readBody(req);
-    const card = data.cards.find((c) => c.id === body.id);
-    if (!card) return sendJSON(res, 404, { error: 'card not found' });
-    try { FlashLogic.gradeReviewCard(card, body.grade); }
-    catch (err) { return sendJSON(res, 400, { error: err.message }); }
-    saveData();
+    if (!data.cards.some((c) => c.id === body.id)) return sendJSON(res, 404, { error: 'card not found' });
+    if (!['again', 'got', 'easy'].includes(body.grade)) {
+      return sendJSON(res, 400, { error: 'grade must be "again", "got" or "easy"' });
+    }
+    const card = commitDataMutation((draft) => {
+      const draftCard = draft.cards.find((c) => c.id === body.id);
+      FlashLogic.gradeReviewCard(draftCard, body.grade);
+      return draftCard;
+    });
     return sendJSON(res, 200, { card });
   }
 
   const update = pathname.match(/^\/api\/cards\/([^/]+)$/);
   if (req.method === 'PATCH' && update) {
-    const card = data.cards.find((c) => c.id === update[1]);
-    if (!card) return sendJSON(res, 404, { error: 'card not found' });
+    const currentCard = data.cards.find((c) => c.id === update[1]);
+    if (!currentCard) return sendJSON(res, 404, { error: 'card not found' });
     const body = await readBody(req);
     if (!body || typeof body.front !== 'string' || !body.front.trim()
         || typeof body.back !== 'string' || !body.back.trim()) {
       return sendJSON(res, 400, { error: 'front and back must be non-empty strings' });
     }
-    let changes;
-    try { changes = editableWordFields(card, body); }
+    try { editableWordFields(data, currentCard, body); }
     catch (err) { return sendJSON(res, 400, { error: err.message }); }
-    const previous = { ...card };
-    card.front = body.front.trim();
-    card.back = body.back.trim();
-    for (const key of Object.keys(changes)) card[key] = changes[key];
-    try { saveData(); }
-    catch (err) {
-      for (const key of Object.keys(changes)) delete card[key];
-      Object.assign(card, previous);
-      throw err;
-    }
+    const card = commitDataMutation((draft) => {
+      const draftCard = draft.cards.find((c) => c.id === update[1]);
+      const changes = editableWordFields(draft, draftCard, body);
+      draftCard.front = body.front.trim();
+      draftCard.back = body.back.trim();
+      for (const key of Object.keys(changes)) draftCard[key] = changes[key];
+      return draftCard;
+    });
     return sendJSON(res, 200, { card });
   }
 
   const del = pathname.match(/^\/api\/cards\/([^/]+)$/);
   if (req.method === 'DELETE' && del) {
-    const idx = data.cards.findIndex((c) => c.id === del[1]);
-    if (idx === -1) return sendJSON(res, 404, { error: 'card not found' });
-    // Capture legacy numbering before removing a numbered card.
-    if (Number.isSafeInteger(data.cards[idx].wordNumber) && data.cards[idx].wordNumber > 0) {
-      data.meta = { ...data.meta, nextWordNumber: nextWordNumber() };
-    }
-    data.cards.splice(idx, 1);
-    saveData();
+    if (!data.cards.some((c) => c.id === del[1])) return sendJSON(res, 404, { error: 'card not found' });
+    commitDataMutation((draft) => {
+      const idx = draft.cards.findIndex((c) => c.id === del[1]);
+      // Capture legacy numbering before removing a numbered card.
+      if (Number.isSafeInteger(draft.cards[idx].wordNumber) && draft.cards[idx].wordNumber > 0) {
+        draft.meta = { ...draft.meta, nextWordNumber: nextWordNumber(draft) };
+      }
+      draft.cards.splice(idx, 1);
+    });
     return sendJSON(res, 200, { ok: true });
   }
 
@@ -490,8 +491,9 @@ async function handleApi(req, res, pathname) {
     const deck = String(body.deck || 'All');
     const hardest = Array.isArray(body.hardest) ? body.hardest.slice(0, 2).map(String) : [];
     if (!Number.isFinite(reviewed) || reviewed < 1) return sendJSON(res, 400, { error: 'reviewed must be >= 1' });
-    data.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
-    saveData();
+    commitDataMutation((draft) => {
+      draft.history.push({ date: localDate(), deck, reviewed, correct, remember, easy, again });
+    });
     try {
       appendLog(sessionLogLine({ deck, reviewed, correct, remember, easy, again, hardest }));
       return sendJSON(res, 200, { ok: true, logged: true });
@@ -509,15 +511,17 @@ async function handleApi(req, res, pathname) {
     if (!Number.isFinite(questions) || questions < 1) return sendJSON(res, 400, { error: 'questions must be >= 1' });
     // Missed cards come due immediately; streak/lapses stay untouched so the
     // quiz never distorts the spaced-repetition stats.
-    const now = Date.now();
-    const missedFronts = [];
-    for (const id of missedIds) {
-      const card = data.cards.find((c) => c.id === id);
-      if (!card) continue;
-      if (card.due > now) card.due = now;
-      missedFronts.push(card.front);
-    }
-    saveData();
+    const missedFronts = commitDataMutation((draft) => {
+      const now = Date.now();
+      const fronts = [];
+      for (const id of missedIds) {
+        const card = draft.cards.find((c) => c.id === id);
+        if (!card) continue;
+        if (card.due > now) card.due = now;
+        fronts.push(card.front);
+      }
+      return fronts;
+    });
     try {
       appendLog(quizLogLine({ deck, questions, correct, missedFronts }));
       return sendJSON(res, 200, { ok: true, logged: true });
