@@ -346,6 +346,28 @@ test('PWA Article backup snapshot replaces Articles and unknownWords atomically'
   assert.deepEqual((await store.exportSnapshot()).articles.map((item) => item.id), ['restored']);
   assert.deepEqual(await store.getUnknownWords(), ['new']);
 });
+test('PWA AI drafts persist independently and survive a new ArticleStore instance', async () => {
+  const idb = fakeIndexedDb();
+  const first = createArticleStore(idb, Utils);
+  const saved = await first.saveAiDraft({ type: 'article', data: { title: 'Draft', content: 'Text.' }, provenance: { provider: 'zhipu', token: 'secret', prompt: 'hidden' } });
+  const second = createArticleStore(idb, Utils);
+  assert.deepEqual((await second.listAiDrafts()).map((item) => item.id), [saved.id]);
+  assert.doesNotMatch(JSON.stringify((await second.listAiDrafts())[0].provenance), /secret|hidden/);
+  assert.equal((await second.list()).length, 0);
+});
+test('deleting an AI draft never deletes a formal Reading Article', async () => {
+  const store = createArticleStore(fakeIndexedDb(), Utils);
+  const article = await store.create(sample);
+  const draft = await store.saveAiDraft({ type: 'article', data: { title: 'Draft', content: 'Text.' } });
+  await store.deleteAiDraft(draft.id);
+  assert.equal((await store.listAiDrafts()).length, 0);
+  assert.equal((await store.get(article.id)).id, article.id);
+});
+test('ArticleStore backup remains unchanged and excludes local AI drafts', async () => {
+  const store = createArticleStore(fakeIndexedDb(), Utils);
+  await store.saveAiDraft({ type: 'sentences', data: { sentences: [{ english: 'A sentence.' }] } });
+  assert.deepEqual(Object.keys(await store.exportSnapshot()).sort(), ['articles', 'unknownWords']);
+});
 
 async function nodeArticleHarness(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flashdesk-article-test-'));
@@ -361,6 +383,7 @@ async function nodeArticleHarness(t) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return require('../public/logic.js');
       if (name === './public/article-utils.js') return Utils;
       if (name === 'node:fs') return { ...fs, renameSync(from, to) {
@@ -370,7 +393,7 @@ async function nodeArticleHarness(t) {
       if (name === 'node:http') return { createServer(handler) {
         server = http.createServer(handler);
         const listen = server.listen.bind(server);
-        server.listen = (_port, callback) => listen(0, '127.0.0.1', callback);
+        server.listen = (_port, _host, callback) => listen(0, '127.0.0.1', callback);
         return server;
       } };
       return require(name);
@@ -394,6 +417,30 @@ test('Node ArticleStore creates its independent file and model', async (t) => {
   const article = await h.store.create(sample);
   assert.equal(article.source, 'Reuters');
   assert.equal(JSON.parse(fs.readFileSync(h.articleFile)).articles.length, 1);
+});
+test('Node AI drafts persist independently, reopen without a provider, and delete without touching Reading', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const article = await h.store.create(sample);
+  const draft = await h.store.saveAiDraft({ type: 'article', data: { title: 'Paid draft', content: 'Draft body.' }, provenance: { provider: 'zhipu', model: 'glm', token: 'server-secret' } });
+  const drafts = await h.store.listAiDrafts();
+  assert.equal(drafts[0].id, draft.id);
+  assert.equal(drafts[0].data.title, 'Paid draft');
+  assert.doesNotMatch(JSON.stringify(drafts[0].provenance), /server-secret/);
+  await h.store.deleteAiDraft(draft.id);
+  assert.equal((await h.store.listAiDrafts()).length, 0);
+  assert.equal((await h.store.get(article.id)).id, article.id);
+});
+test('saving an AI Article retains minimal provenance without changing the backup version', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const article = await h.store.create({ ...sample, aiProvenance: {
+    provider: 'zhipu', model: 'glm', task: 'generate_article', generatedAt: '2026-10-17T00:00:00.000Z',
+    attemptCount: 1, usageKnown: true, usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 }, generationVersion: 'build',
+    token: 'must-not-persist', prompt: 'must-not-persist',
+  } });
+  assert.equal(article.aiProvenance.source, 'FlashDesk AI');
+  assert.equal(article.aiProvenance.provider, 'zhipu');
+  assert.equal('token' in article.aiProvenance, false);
+  assert.equal('prompt' in article.aiProvenance, false);
 });
 test('Node ArticleStore reads the latest disk state on every list', async (t) => {
   const h = await nodeArticleHarness(t);

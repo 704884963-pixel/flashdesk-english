@@ -3,10 +3,11 @@
 
 ((global) => {
   const DB_NAME = 'flashdesk-content';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   const STORE = 'articles';
   const PROFILE_STORE = 'readingProfile';
   const PROFILE_ID = 'default';
+  const DRAFT_STORE = 'aiDrafts';
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const makeId = () => `a_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 
@@ -23,8 +24,13 @@
           const db = request.result;
           if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
           if (!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
+          if (!db.objectStoreNames.contains(DRAFT_STORE)) db.createObjectStore(DRAFT_STORE, { keyPath: 'id' });
         };
-        request.onsuccess = () => resolve(request.result);
+        request.onblocked = () => reject(new Error('文章数据库正在被其他页面使用，请关闭旧页面后重试'));
+        request.onsuccess = () => {
+          request.result.onversionchange = () => request.result.close();
+          resolve(request.result);
+        };
         request.onerror = () => reject(request.error || new Error('无法打开文章数据库'));
       });
       return dbPromise;
@@ -137,7 +143,34 @@
       return exportSnapshot();
     }
 
-    return { list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord, exportSnapshot, replaceSnapshot };
+    async function listAiDrafts() {
+      const db = await open();
+      const transaction = db.transaction(DRAFT_STORE, 'readonly');
+      return clone(await requestResult(transaction.objectStore(DRAFT_STORE).getAll()));
+    }
+
+    async function saveAiDraft(fields) {
+      const db = await open();
+      const now = Date.now();
+      const draft = {
+        type: fields?.type, data: clone(fields?.data || {}), provenance: utils.normalizeAiProvenance(fields?.provenance) || {},
+        id: fields?.id || `d_${now}_${Math.random().toString(16).slice(2, 8)}`, createdAt: fields?.createdAt || now,
+      };
+      const transaction = db.transaction(DRAFT_STORE, 'readwrite');
+      transaction.objectStore(DRAFT_STORE).put(draft);
+      await transactionDone(transaction);
+      return clone(draft);
+    }
+
+    async function deleteAiDraft(id) {
+      const db = await open();
+      const transaction = db.transaction(DRAFT_STORE, 'readwrite');
+      transaction.objectStore(DRAFT_STORE).delete(String(id));
+      await transactionDone(transaction);
+      return { ok: true };
+    }
+
+    return { list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord, exportSnapshot, replaceSnapshot, listAiDrafts, saveAiDraft, deleteAiDraft };
   }
 
   global.createArticleStore = createArticleStore;

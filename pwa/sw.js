@@ -12,6 +12,8 @@ const ASSETS = [
   'batch-import.js',
   'article-utils.js',
   'article-store.js',
+  'reading-progress.js',
+  'pwa-update.js',
   'ai-learning.js',
   'usage-tracker.js',
   'backup.js',

@@ -54,6 +54,7 @@ async function harness(t, mode) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:os') return { homedir: () => dir };
       if (name === 'node:fs') return {
@@ -67,7 +68,7 @@ async function harness(t, mode) {
         createServer(handler) {
           server = http.createServer(handler);
           const listen = server.listen.bind(server);
-          server.listen = (_port, callback) => listen(0, '127.0.0.1', callback);
+          server.listen = (_port, _host, callback) => listen(0, '127.0.0.1', callback);
           return server;
         },
       };

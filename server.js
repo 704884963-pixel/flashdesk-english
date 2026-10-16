@@ -8,8 +8,10 @@ const path = require('node:path');
 const os = require('node:os');
 const seed = require('./seed.js');
 const FlashLogic = require('./public/logic.js');
+const { resolveHost } = require('./server-config.js');
 
 const PORT = 5902;
+const HOST = resolveHost();
 const DATA_FILE = path.join(__dirname, 'flashdesk-data.json');
 const ARTICLE_FILE = path.join(__dirname, 'flashdesk-articles.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -141,10 +143,10 @@ function loadData() {
 }
 
 function loadArticles() {
-  if (!fs.existsSync(ARTICLE_FILE)) return { articles: [], unknownWords: [] };
+  if (!fs.existsSync(ARTICLE_FILE)) return { articles: [], unknownWords: [], drafts: [] };
   const parsed = JSON.parse(fs.readFileSync(ARTICLE_FILE, 'utf8'));
   if (!parsed || !Array.isArray(parsed.articles)) throw new Error('article data file is invalid');
-  return { ...parsed, unknownWords: normalizeUnknownWords(parsed.unknownWords) };
+  return { ...parsed, unknownWords: normalizeUnknownWords(parsed.unknownWords), drafts: Array.isArray(parsed.drafts) ? parsed.drafts : [] };
 }
 
 function normalizeUnknownWords(words) {
@@ -205,6 +207,22 @@ function normalizeParagraphTranslations(input, content) {
   return paragraphTranslations;
 }
 
+function normalizeAiProvenance(value) {
+  if (!value || typeof value !== 'object') return null;
+  const text = (key) => typeof value[key] === 'string' ? value[key].trim().slice(0, 160) : '';
+  return {
+    source: 'FlashDesk AI', provider: text('provider'), model: text('model'), task: text('task'),
+    generatedAt: text('generatedAt'), attemptCount: Math.max(1, Number(value.attemptCount) || 1),
+    usageKnown: value.usageKnown === true, generationVersion: text('generationVersion'),
+    ...(text('requestId') ? { requestId: text('requestId') } : {}),
+    ...(value.usage && typeof value.usage === 'object' ? { usage: {
+      inputTokens: Math.max(0, Number(value.usage.inputTokens) || 0),
+      outputTokens: Math.max(0, Number(value.usage.outputTokens) || 0),
+      totalTokens: Math.max(0, Number(value.usage.totalTokens) || 0),
+    } } : {}),
+  };
+}
+
 function normalizeArticleInput(input) {
   const title = typeof input?.title === 'string' ? input.title.trim() : '';
   const content = typeof input?.content === 'string' ? input.content.replace(/\r\n?/g, '\n').trim() : '';
@@ -221,6 +239,8 @@ function normalizeArticleInput(input) {
   const article = { title, source, sourceUrl, publishedAt, content };
   const paragraphTranslations = normalizeParagraphTranslations(input?.paragraphTranslations, content);
   if (paragraphTranslations.length) article.paragraphTranslations = paragraphTranslations;
+  const aiProvenance = normalizeAiProvenance(input?.aiProvenance);
+  if (aiProvenance) article.aiProvenance = aiProvenance;
   return article;
 }
 
@@ -301,7 +321,8 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === 'GET' && pathname === '/api/articles/backup') {
-    return sendJSON(res, 200, loadArticles());
+    const articleData = loadArticles();
+    return sendJSON(res, 200, { articles: articleData.articles, unknownWords: articleData.unknownWords });
   }
 
   if (req.method === 'PUT' && pathname === '/api/articles/backup') {
@@ -309,12 +330,40 @@ async function handleApi(req, res, pathname) {
     let replacement;
     try { replacement = validateArticleSnapshot(body); }
     catch (err) { return sendJSON(res, 400, { error: err.message }); }
-    saveArticles(replacement);
+    const drafts = loadArticles().drafts;
+    saveArticles({ ...replacement, drafts });
     return sendJSON(res, 200, replacement);
   }
 
   if (req.method === 'GET' && pathname === '/api/articles') {
     return sendJSON(res, 200, { articles: loadArticles().articles });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/articles/drafts') {
+    return sendJSON(res, 200, { drafts: loadArticles().drafts });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/articles/drafts') {
+    const body = await readBody(req);
+    if (!body || !['sentences', 'article'].includes(body.type) || !body.data || typeof body.data !== 'object') {
+      return sendJSON(res, 400, { error: 'AI draft is invalid' });
+    }
+    const articleData = loadArticles();
+    const now = Date.now();
+    const draft = { id: `d_${now}_${Math.random().toString(16).slice(2, 8)}`, type: body.type, data: cloneData(body.data), provenance: normalizeAiProvenance(body.provenance) || {}, createdAt: now };
+    articleData.drafts.push(draft);
+    saveArticles(articleData);
+    return sendJSON(res, 201, { draft });
+  }
+
+  const articleDraft = pathname.match(/^\/api\/articles\/drafts\/([^/]+)$/);
+  if (req.method === 'DELETE' && articleDraft) {
+    const articleData = loadArticles();
+    const index = articleData.drafts.findIndex((item) => item.id === articleDraft[1]);
+    if (index === -1) return sendJSON(res, 404, { error: 'draft not found' });
+    articleData.drafts.splice(index, 1);
+    saveArticles(articleData);
+    return sendJSON(res, 200, { ok: true });
   }
 
   if (req.method === 'GET' && pathname === '/api/articles/profile') {
@@ -581,15 +630,15 @@ const server = http.createServer(async (req, res) => {
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    console.error(`FlashDesk: port ${PORT} already in use — is another FlashDesk running? (lsof -i :${PORT})`);
+    console.error(`FlashDesk: ${HOST}:${PORT} already in use — is another FlashDesk running? (lsof -i :${PORT})`);
     process.exit(1);
   }
   throw err;
 });
 
 loadData();
-server.listen(PORT, () => {
-  console.log(`FlashDesk → http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`FlashDesk → http://${HOST}:${PORT}`);
   console.log(`  data: ${DATA_FILE}`);
   console.log(`  log:  ${LOG_FILE}`);
 });

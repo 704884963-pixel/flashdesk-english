@@ -54,6 +54,7 @@ async function nodeHarness(t) {
     console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return require('../seed.js');
+      if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:http') {
         return {
@@ -61,7 +62,7 @@ async function nodeHarness(t) {
             server = http.createServer(handler);
             const listen = server.listen.bind(server);
             // Execute the real handler on an isolated ephemeral loopback port.
-            server.listen = (_port, callback) => listen(0, '127.0.0.1', callback);
+            server.listen = (_port, _host, callback) => listen(0, '127.0.0.1', callback);
             return server;
           },
         };

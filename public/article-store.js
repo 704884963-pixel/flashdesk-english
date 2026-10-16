@@ -29,5 +29,8 @@
       await api(`/api/articles/${encodeURIComponent(id)}/progress`, json('PATCH', progress))
     ).article,
     delete: (id) => api(`/api/articles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    listAiDrafts: async () => (await api('/api/articles/drafts')).drafts,
+    saveAiDraft: async (draft) => (await api('/api/articles/drafts', json('POST', draft))).draft,
+    deleteAiDraft: (id) => api(`/api/articles/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   };
 })();

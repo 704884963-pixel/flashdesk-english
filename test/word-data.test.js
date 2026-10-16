@@ -38,6 +38,7 @@ async function harness(t, mode, initial = { cards: [], history: [] }) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:os') return { homedir: () => dir };
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
@@ -47,7 +48,7 @@ async function harness(t, mode, initial = { cards: [], history: [] }) {
       if (name === 'node:http') return { createServer(handler) {
         server = http.createServer(handler);
         const listen = server.listen.bind(server);
-        server.listen = (_port, cb) => listen(0, '127.0.0.1', cb);
+        server.listen = (_port, _host, cb) => listen(0, '127.0.0.1', cb);
         return server;
       } };
       return require(name);

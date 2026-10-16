@@ -11,13 +11,19 @@ function registerServiceWorker() {
   if (typeof window === 'undefined' || typeof navigator === 'undefined'
     || !window.FLASHDESK_BUILD || !('serviceWorker' in navigator)) return;
 
-  const reloadKey = `flashdesk-sw-reloaded-${window.FLASHDESK_BUILD}`;
-  let reloadRequested = false;
+  const coordinator = FlashPwaUpdate.createPwaUpdateCoordinator({
+    build: window.FLASHDESK_BUILD,
+    sessionStorage,
+    reload: () => window.location.reload(),
+    confirm: (message) => window.confirm(message),
+    getRisks: pwaUpdateRisks,
+    isRestoreBlocked: () => state.backup.restoreBlocked,
+    onAvailable: () => { state.updateAvailable = true; renderPwaUpdateNotice(); },
+    onBlocked: (message) => toast(message),
+  });
+  state.pwaUpdate = coordinator;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloadRequested || sessionStorage.getItem(reloadKey) === '1') return;
-    reloadRequested = true;
-    sessionStorage.setItem(reloadKey, '1');
-    window.location.reload();
+    coordinator.controllerChanged();
   });
 
   window.addEventListener('load', async () => {
@@ -61,6 +67,7 @@ const state = {
     returnToId: null, unknownWords: new Set(),
     revealedParagraphs: new Set(),
     narrationId: 0, narrationRate: null, narrationParagraphIndex: null,
+    currentArticleId: null, readingGeneration: 0,
   },
   ai: {
     mode: 'home', loading: false, error: '', preview: null, targets: [], candidateCount: 0,
@@ -70,9 +77,28 @@ const state = {
     narrationId: 0, narrationRate: null, narrationSpeed: 1,
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
     helperQuery: '', helperAnswer: '', helperLookup: null, helperLoading: false, helperError: '',
+    drafts: [],
   },
   backup: { pending: null, restoring: false, restoreBlocked: false, recovery: null },
+  updateAvailable: false,
+  pwaUpdate: null,
 };
+
+function pwaUpdateRisks() {
+  const risks = [];
+  if (state.session?.active && !state.session.complete) risks.push('active-review');
+  if (state.ai.preview) risks.push('ai-preview');
+  if (state.view === 'reading' && state.article.mode === 'reader') risks.push('active-reading');
+  if ($('#edit-dialog')?.open || $('#add-front')?.value?.trim() || $('#add-back')?.value?.trim()
+      || $('#batch-import-text')?.value?.trim() || $('#article-title')?.value?.trim()
+      || $('#article-content')?.value?.trim() || $('#ai-helper-query')?.value?.trim()) risks.push('unsaved-input');
+  return risks;
+}
+
+function renderPwaUpdateNotice() {
+  const notice = $('#pwa-update-notice');
+  if (notice) notice.hidden = !state.updateAvailable;
+}
 
 function usageAreaForView(view) {
   return ({ review: 'review', words: 'words', ai: 'aiLearning', reading: 'reading' })[view] || 'other';
@@ -148,6 +174,30 @@ function assertRestoreResolved() {
   const error = new Error('检测到上一次备份恢复未完成。请先恢复到操作前状态，避免数据进一步混合。');
   error.code = 'RESTORE_RECOVERY_REQUIRED';
   throw error;
+}
+
+let articleProgressCoordinator = null;
+function readingProgressCoordinator() {
+  if (articleProgressCoordinator) return articleProgressCoordinator;
+  articleProgressCoordinator = FlashReadingProgress.createReadingProgressCoordinator({
+    save: async (articleId, progress) => {
+      assertRestoreResolved();
+      return ArticleStore.updateProgress(articleId, progress);
+    },
+    onApplied: (updated) => {
+      state.article.current = updated;
+      const index = state.articles.findIndex((item) => item.id === updated.id);
+      if (index !== -1) state.articles[index] = updated;
+    },
+    onError: (error) => toast(`阅读进度保存失败：${error.message}`),
+  });
+  return articleProgressCoordinator;
+}
+
+function closeReadingProgressIdentity() {
+  const identity = readingProgressCoordinator().close();
+  state.article.currentArticleId = identity.articleId;
+  state.article.readingGeneration = identity.generation;
 }
 
 function wordDetails(card) {
@@ -2234,13 +2284,30 @@ function refreshAiServiceStatus() {
 }
 
 function renderAiHome() {
+  const drafts = [...state.ai.drafts].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+  const draftHtml = drafts.length ? `<section class="panel ai-draft-inbox"><h3>未保存生成内容</h3>${drafts.map((draft) => `<div class="ai-draft-row"><button type="button" class="btn" data-ai-open-draft="${esc(draft.id)}">${draft.type === 'article' ? '短文' : '长句'} · ${esc(draft.type === 'article' ? draft.data.title : draft.data.sentences?.[0]?.english || '生成内容')}</button><button type="button" class="btn btn-danger" data-ai-delete-draft="${esc(draft.id)}">删除草稿</button></div>`).join('')}</section>` : '';
   $('#ai-root').innerHTML = `<div class="ai-page">
     <header class="ai-head"><div><h2>AI 个性化学习</h2><p>AI 只生成候选内容，保存始终由你确认。</p></div></header>
     <div class="ai-home-actions">
       <button type="button" class="panel ai-entry" data-ai-mode="sentences"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></button>
       <button type="button" class="panel ai-entry" data-ai-mode="article"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></button>
       <button type="button" class="panel ai-entry" data-ai-mode="helper"><strong>AI 英语助手</strong><span>查单词、近义词、词义区别和简单例句</span></button>
-    </div>${aiSettingsHtml()}</div>`;
+    </div>${draftHtml}${aiSettingsHtml()}</div>`;
+}
+
+function aiProvenance(task, result) {
+  const usage = result.usage && typeof result.usage === 'object' ? {
+    inputTokens: Number(result.usage.inputTokens) || 0,
+    outputTokens: Number(result.usage.outputTokens) || 0,
+    totalTokens: Number(result.usage.totalTokens) || 0,
+  } : null;
+  return {
+    source: 'FlashDesk AI', provider: String(result.provider || ''), model: String(result.model || ''), task,
+    generatedAt: new Date().toISOString(), ...(result.requestId ? { requestId: String(result.requestId) } : {}),
+    attemptCount: Math.max(1, Number(result.timing?.providerCalls ?? result.timing?.attempts) || 1),
+    usageKnown: Boolean(usage), ...(usage ? { usage } : {}),
+    generationVersion: window.FLASHDESK_BUILD || 'development',
+  };
 }
 
 function helperAnswerHtml(answer) {
@@ -2430,7 +2497,13 @@ async function generateAi(type) {
     const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
     const result = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
     rememberAiTiming(task, result, started);
-    state.ai.preview = { type, data: result.data, usage: result.usage };
+    const provenance = aiProvenance(task, result);
+    state.ai.preview = { type, data: result.data, usage: result.usage, provenance, draftId: null };
+    try {
+      const draft = await ArticleStore.saveAiDraft({ type, data: result.data, provenance });
+      state.ai.drafts.push(draft);
+      state.ai.preview.draftId = draft.id;
+    } catch { toast('生成成功，但未能保存本地草稿。请在刷新前保存内容。'); }
     state.ai.service = { provider: result.provider, model: result.model };
     const usedTargets = article ? result.data.targetWordsUsed : result.data.sentences[0]?.targetWordsUsed;
     const historyTargets = article
@@ -2506,12 +2579,12 @@ function renderArticleHome() {
         <h3>${esc(article.title)}</h3>
         ${sourceLine ? `<div class="article-source">${esc(sourceLine)}</div>` : ''}
         <div class="article-card-stats">
-          <span class="article-recognition-stat">当前认识率 ${articlePercent(recognition.percent)}%</span>
+          <span class="article-recognition-stat">阅读自报熟悉度 ${articlePercent(recognition.percent)}%</span>
           <span>${analysis.wordCount.toLocaleString()} words</span>
           <span>FlashDesk 命中率 ${coverage.percent}%</span>
           <span>阅读进度 ${progress}%</span>
         </div>
-        <div class="article-recognition-note">基于你标记的不认识词</div>
+        <div class="article-recognition-note">仅表示本次阅读中未标记为生词的比例，不代表长期掌握。</div>
         <div class="article-progress"><span style="width:${progress}%"></span></div>
       </div>
       <div class="article-card-actions">
@@ -2606,12 +2679,12 @@ function renderArticleReader() {
       <h2>${esc(article.title)}</h2>
       ${sourceLine ? `<div class="article-source">${esc(sourceLine)}</div>` : ''}
       <div class="article-reader-meta">
-        <span class="article-recognition-stat">当前认识率 <strong id="article-recognition-rate">${articlePercent(metrics.recognition.percent)}%</strong></span>
+        <span class="article-recognition-stat">阅读自报熟悉度 <strong id="article-recognition-rate">${articlePercent(metrics.recognition.percent)}%</strong></span>
         <span>${metrics.analysis.wordCount.toLocaleString()} words</span>
         <span>FlashDesk 命中率 <span id="article-hit-rate">${metrics.coverage.percent}%</span></span>
         ${sourceUrl ? `<a href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">打开原文</a>` : ''}
       </div>
-      <div class="article-recognition-note">基于你标记的不认识词</div>
+      <div class="article-recognition-note">仅表示本次阅读中未标记为生词的比例，不代表长期掌握。</div>
       <div class="article-reader-progress"><span>阅读进度 <strong id="article-progress-label">${progress}%</strong></span>
         <div class="article-progress"><span id="article-progress-bar" style="width:${progress}%"></span></div></div>
     </header>
@@ -2629,8 +2702,13 @@ function renderArticleView() {
 }
 
 async function openArticle(id) {
+  flushArticleProgress();
+  const identity = readingProgressCoordinator().open(id);
+  state.article.currentArticleId = identity.articleId;
+  state.article.readingGeneration = identity.generation;
   try {
     const article = await ArticleStore.get(id);
+    if (!readingProgressCoordinator().isCurrent(identity)) return;
     const index = state.articles.findIndex((item) => item.id === article.id);
     if (index === -1) state.articles.push(article); else state.articles[index] = article;
     // A different Article always starts fully collapsed; expansion is pure UI
@@ -2641,6 +2719,7 @@ async function openArticle(id) {
     state.article.mode = 'reader';
     if (state.view !== 'reading') switchView('reading'); else renderArticleReader();
   } catch (err) {
+    if (!readingProgressCoordinator().isCurrent(identity)) return;
     if (articleIsMissing(err)) {
       state.articles = state.articles.filter((item) => item.id !== id);
       state.article.cache.delete(id);
@@ -2661,18 +2740,8 @@ function stopArticleProgressTracking() {
   state.article.observer = null;
 }
 
-async function saveArticleProgress(progress) {
-  const article = state.article.current;
-  if (!article || !progress) return;
-  try {
-    assertRestoreResolved();
-    const updated = await ArticleStore.updateProgress(article.id, progress);
-    state.article.current = updated;
-    const index = state.articles.findIndex((item) => item.id === updated.id);
-    if (index !== -1) state.articles[index] = updated;
-  } catch (err) {
-    toast(`阅读进度保存失败：${err.message}`);
-  }
+function saveArticleProgress(progress) {
+  return readingProgressCoordinator().persist(progress);
 }
 
 function flushArticleProgress() {
@@ -2685,7 +2754,9 @@ function flushArticleProgress() {
 
 function queueArticleProgress(sentenceIndex, sentenceCount) {
   const percent = sentenceCount ? Math.min(100, Math.round(((sentenceIndex + 1) / sentenceCount) * 100)) : 0;
-  state.article.pendingProgress = { progressSentenceIndex: sentenceIndex, progressPercent: percent };
+  state.article.pendingProgress = readingProgressCoordinator().capture({
+    progressSentenceIndex: sentenceIndex, progressPercent: percent,
+  });
   const label = $('#article-progress-label');
   const bar = $('#article-progress-bar');
   if (label) label.textContent = `${percent}%`;
@@ -3289,6 +3360,7 @@ function switchView(name) {
   if (state.view === 'reading' && name !== 'reading') {
     stopArticleProgressTracking();
     flushArticleProgress();
+    closeReadingProgressIdentity();
   }
   state.view = name;
   setMoreMenuOpen(false);
@@ -3324,6 +3396,7 @@ function switchView(name) {
 /* ---------- events ---------- */
 
 function bindEvents() {
+  $('#pwa-update-now')?.addEventListener('click', () => state.pwaUpdate?.apply());
   document.querySelectorAll('.tab').forEach((b) =>
     b.addEventListener('click', () => {
       if (b.dataset.view === 'words') state.wordLibrary.selectedId = null;
@@ -3667,6 +3740,7 @@ function bindEvents() {
       stopArticleProgressTracking();
       stopArticleParagraphNarration(false);
       flushArticleProgress();
+      closeReadingProgressIdentity();
       state.article.revealedParagraphs = new Set();
       state.article.mode = 'list';
       state.article.current = null;
@@ -3757,7 +3831,16 @@ function bindEvents() {
     }
     const button = e.target.closest('button');
     if (!button) return;
-    if (button.dataset.aiMode) {
+    if (button.dataset.aiOpenDraft !== undefined) {
+      const draft = state.ai.drafts.find((item) => item.id === button.dataset.aiOpenDraft);
+      if (!draft) return;
+      state.ai.mode = draft.type; state.ai.preview = { type: draft.type, data: draft.data, usage: draft.provenance?.usage, provenance: draft.provenance, draftId: draft.id };
+      state.ai.error = ''; state.ai.revealed = new Set(); state.ai.revealedParagraphs = new Set(); renderAiView();
+    } else if (button.dataset.aiDeleteDraft !== undefined) {
+      await ArticleStore.deleteAiDraft(button.dataset.aiDeleteDraft);
+      state.ai.drafts = state.ai.drafts.filter((item) => item.id !== button.dataset.aiDeleteDraft);
+      renderAiHome();
+    } else if (button.dataset.aiMode) {
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
       state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
     } else if (button.dataset.aiHelperAction !== undefined) {
@@ -3817,8 +3900,14 @@ function bindEvents() {
           title: preview.data.title, content: preview.data.content,
           paragraphTranslations: preview.data.paragraphTranslations,
           source: 'FlashDesk AI', sourceUrl: '', publishedAt: '',
+          aiProvenance: preview.provenance,
         });
-        state.articles.push(article); state.article.cache.delete(article.id); await openArticle(article.id);
+        state.articles.push(article); state.article.cache.delete(article.id);
+        if (preview.draftId) {
+          await ArticleStore.deleteAiDraft(preview.draftId);
+          state.ai.drafts = state.ai.drafts.filter((item) => item.id !== preview.draftId);
+        }
+        await openArticle(article.id);
       } catch (err) { state.ai.error = `保存失败：${err.message}`; button.disabled = false; renderAiArticle(); }
     }
   });
@@ -4022,6 +4111,11 @@ async function init() {
     state.articles = await ArticleStore.list();
   } catch (err) {
     state.article.error = err.message;
+  }
+  try {
+    state.ai.drafts = await ArticleStore.listAiDrafts();
+  } catch {
+    state.ai.drafts = [];
   }
   try {
     const unknownWords = await ArticleStore.getUnknownWords();

@@ -33,6 +33,24 @@
     }
   }
 
+  function normalizeAiProvenance(value) {
+    if (!value || typeof value !== 'object') return null;
+    const text = (key) => typeof value[key] === 'string' ? value[key].trim().slice(0, 160) : '';
+    const usage = value.usage && typeof value.usage === 'object' ? {
+      inputTokens: Math.max(0, Number(value.usage.inputTokens) || 0),
+      outputTokens: Math.max(0, Number(value.usage.outputTokens) || 0),
+      totalTokens: Math.max(0, Number(value.usage.totalTokens) || 0),
+    } : null;
+    const result = {
+      source: 'FlashDesk AI', provider: text('provider'), model: text('model'), task: text('task'),
+      generatedAt: text('generatedAt'), attemptCount: Math.max(1, Number(value.attemptCount) || 1),
+      usageKnown: value.usageKnown === true, generationVersion: text('generationVersion'),
+    };
+    if (text('requestId')) result.requestId = text('requestId');
+    if (usage) result.usage = usage;
+    return result;
+  }
+
   function normalizeArticleInput(input) {
     const title = typeof input?.title === 'string' ? input.title.trim() : '';
     const content = typeof input?.content === 'string' ? normalizeContent(input.content) : '';
@@ -45,6 +63,8 @@
     const article = { title, source, sourceUrl, publishedAt, content };
     const paragraphTranslations = normalizeParagraphTranslations(input?.paragraphTranslations, splitParagraphs(content).length);
     if (paragraphTranslations.length) article.paragraphTranslations = paragraphTranslations;
+    const aiProvenance = normalizeAiProvenance(input?.aiProvenance);
+    if (aiProvenance) article.aiProvenance = aiProvenance;
     return article;
   }
 
@@ -215,7 +235,7 @@
   const FlashArticleUtils = {
     normalizeContent, normalizeParagraphTranslations, safeExternalUrl, normalizeArticleInput, splitParagraphs, splitSentences,
     wordTokens, wordKey, resolveWordCard, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
-    normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists,
+    normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists, normalizeAiProvenance,
   };
   if (typeof window !== 'undefined') window.FlashArticleUtils = FlashArticleUtils;
   if (typeof module !== 'undefined' && module.exports) module.exports = FlashArticleUtils;

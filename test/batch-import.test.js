@@ -219,6 +219,7 @@ async function storeHarness(t, mode, initial = baseData()) {
     __dirname: dir, URL, console: { log() {}, error() {} },
     require(name) {
       if (name === './seed.js') return [];
+      if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
         if (fail) throw new Error('write failed');
@@ -227,7 +228,7 @@ async function storeHarness(t, mode, initial = baseData()) {
       if (name === 'node:http') return { createServer(handler) {
         server = http.createServer(handler);
         const listen = server.listen.bind(server);
-        server.listen = (_port, callback) => listen(0, '127.0.0.1', callback);
+        server.listen = (_port, _host, callback) => listen(0, '127.0.0.1', callback);
         return server;
       } };
       return require(name);

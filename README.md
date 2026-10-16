@@ -1,65 +1,62 @@
-# FlashDesk
+# FlashDesk English
 
-A local spaced-repetition flashcard web app built with zero npm dependencies. One Node process serves a vanilla JS front end and a small JSON API, and persists everything to a single JSON file next to the server.
+FlashDesk 是一个本地优先的英语学习应用。Node 版由零依赖的 `node:http` 服务提供页面与 JSON API；PWA 版从 `docs/` 发布，卡片数据保存在设备本地。长文章、AI 草稿和音频缓存与卡片学习数据分开保存。
 
-It also ships as an **offline-first PWA**: the same UI with a localStorage adapter instead of the server, installable on a phone from https://apicad.github.io/flashdesk/ (Share → Add to Home Screen on iOS). After the first load it works with no network at all; cards and review state live on the device, with JSON export/import in the Browse tab for backup and transfer.
+## 主要功能
 
-**Features**
+- **复习**：卡片翻面后可选择“再来一次”“记住了”“很熟”。每一张实体卡独立进入队列、独立评分；即使两张卡的正反面互换，也不会折叠或静默同步评分。
+- **调度**：“记住了”沿 `1 → 3 → 7 → 14 → 30 → 60 → 120 → 240 → 365` 天阶梯前进；“再来一次”重置当前连续记忆并累计历史遗忘；“很熟”使用同一调度体系跳过部分早期间隔。`streak >= 3` 才显示为已掌握。
+- **单词库与检测**：支持搜索、学习状态筛选、批量导入、详情编辑与自适应检测。检测不会修改复习进度。
+- **阅读**：Article 数据独立保存，支持进度、逐段翻译、点词、朗读和用户主动标记的生词。界面的“阅读自报熟悉度”只表示阅读中未标记为生词的 token 比例，不代表长期掌握。
+- **AI 学习**：Provider 由本地设置选择，当前 Worker 支持智谱与 Gemini；查词、长句、短文和翻译使用服务端配置的模型。生成成功后先保存为独立本地草稿，用户明确确认后才进入卡片或 Reading。
+- **发音**：普通/慢速发音走现有高质量 TTS 与离线音频缓存，失败时可回退系统语音；AI 发音是独立 `/pronounce` 通道，当前 Worker 使用 Cloudflare Workers AI Aura-1，并支持固定 speaker。
+- **备份恢复**：完整备份覆盖学习、阅读、AI history 与 usage stats。恢复采用 recovery snapshot 与 journal；异常中断时会要求用户先处理恢复状态。备份与校验降低风险，但不应替代额外的离线备份。
 
-- **Review mode** with tap-to-reveal cards, previous/next navigation, and two-button grading ("Again" / "Got it"). Full keyboard support: space to reveal, arrow keys to move, 1/2 or Enter to grade. Facts stored in both directions (term ↔ definition) collapse to one review per session, with a Keyword / Description / Mixed switch choosing which side shows first; grading updates both stored cards.
-- **Quiz mode**: multiple-choice rounds (10/20/all questions) that can ask word → definition, definition → word, or a random mix per question. Distractors are ranked by word-overlap similarity and length-matched to the correct answer, so wrong options come from the same topic and no option stands out by length. Missed cards go straight back into the review queue.
-- **Decks**: cards belong to named decks, with a global deck filter across every view.
-- **Add and browse**: a quick-add form (Cmd/Ctrl+Enter to submit) and a browse table showing due time, streak, and lapse count per card, with two-click delete.
-- **Copy stats**: one button copies a compact plain-text summary (deck sizes, cards due today, 7-day accuracy, most-lapsed cards) to the clipboard, formatted for pasting into an AI tutor chat.
-- **Session log**: each finished review session or quiz appends one summary line to `~/drills/log.txt`.
+## 数据与并发
 
-## How the scheduling works
+- Node 学习数据默认写入 `flashdesk-data.json`，Article/Reading 写入 `flashdesk-articles.json`。
+- PWA 学习数据保存在 localStorage；文章与 AI 草稿保存在 `flashdesk-content` IndexedDB；发音缓存保存在独立 IndexedDB。
+- PWA 多标签写入使用版本冲突检测。旧标签不会无提示覆盖较新的完整学习快照；发生冲突时应刷新后重试。
+- 新 Service Worker 会及时安装、接管并清理旧 cache，但页面不会在 `controllerchange` 时强制刷新。页面显示“新版本已准备好”，由用户点击更新；活跃复习、未保存 AI 内容或表单输入会先确认，未完成恢复会阻止刷新。
 
-This is deliberately simpler than SM-2: no ease factors, no self-rated difficulty, just two buttons and a fixed interval ladder.
+## 本地运行
 
-- **"Got it"** increments the card's streak and schedules it `[1, 3, 7, 14, 30, 60]` days out by streak count. Streaks past 6 stay at 60 days.
-- **"Again"** resets the streak to 0, increments the card's lapse count, and brings it back in 10 minutes.
-- **Quiz misses** make a card due immediately but leave streak and lapses untouched, so quiz rounds never distort the spaced-repetition stats.
-
-## Tech stack
-
-- Node.js standard library only (`node:http`, `node:fs`, `node:path`, `node:os`). No npm packages, no framework, no build step.
-- Vanilla JavaScript, HTML, and CSS on the front end.
-- Persistence: one JSON file (`flashdesk-data.json`), written atomically (write to a temp file, then rename). A corrupt data file is moved aside and the app re-seeds instead of crashing.
-
-## Setup
-
-Requires Node.js 16 or newer. There are no dependencies to install.
+需要 Node.js 18 或更新版本，无需安装 npm 依赖：
 
 ```sh
 node server.js
 ```
 
-Then open http://localhost:5902.
+默认仅监听 `127.0.0.1:5902`。如确需局域网调试，可显式设置：
 
-On first run the server seeds 26 sample cards (an AI-901 exam prep deck defined in `seed.js`) and creates `flashdesk-data.json`. That data file is gitignored; delete it any time to reset to the seed deck. Note that finished sessions are logged to `~/drills/log.txt` in your home directory.
-
-## The PWA build
-
-`docs/` is the static offline build, served by GitHub Pages. It is generated — never edit it by hand:
-
-```sh
-node build.js   # or: npm run build
+```powershell
+$env:FLASHDESK_HOST = '0.0.0.0'
+node server.js
 ```
 
-The build copies `public/` into `docs/`, swaps in `pwa/store-local.js` as the storage adapter (localStorage + the same scheduling logic), injects the PWA head tags, bakes the current cards from `flashdesk-data.json` into `seed-data.js` (fronts and backs only, fresh review state), and stamps the service worker's cache name with a content hash so every deploy updates cleanly.
+监听到局域网不等于获得认证保护；不要在不可信网络上暴露本地数据服务。
 
-Deploy flow: edit `public/` or `pwa/` → `node build.js` → commit `docs/` → push. The site updates in a minute or two; an installed PWA picks the new version up on its next launch with network (a toast says when an update arrived).
+## PWA 构建与更新
 
-Phone and desktop keep separate review state on purpose. To move cards either way, use Export / Import in the Browse tab of the PWA: it accepts a full export (replace) or a plain `[{front, back, deck}]` list (merge, duplicates skipped).
+`docs/` 是构建产物，不要手工编辑：
 
-## Screenshot
+```sh
+node build.js
+```
 
-![FlashDesk review view: a flipped card showing the answer and grade buttons](docs/screenshot.jpg)
+构建会复制 `public/`，替换 PWA 存储适配器，加入默认 137 个 Words，并用内容哈希生成 Service Worker cache 名和页面版本号。HTML 导航采用 network-first；静态资源来自当前版本 cache。更新只清理旧 Cache Storage，不清除 localStorage、IndexedDB、学习数据或设备设置。
 
-## Design notes
+## 安全边界
 
-- **Seed-on-first-run instead of a seed script.** `seed.js` just exports the starter cards; the server seeds automatically whenever the data file is missing. A fresh clone works with plain `node server.js`, and the same path doubles as recovery when the data file is unreadable.
-- **Atomic saves.** Every write goes to `flashdesk-data.json.tmp` and is then renamed over the real file, so a crash mid-write cannot leave a half-written data file.
-- **Keeping the quiz honest.** Quiz misses only move a card's due date; they never touch streak or lapse counts. That split keeps the interval ladder driven purely by real recall grades from review sessions.
-- **Zero dependencies on purpose.** The whole app is an exercise in how far `node:http` plus vanilla JS gets you: routing, JSON body parsing with a size limit, static file serving with a path traversal guard, all in one readable file.
+- API key 与上游 Secret 只放在 Worker/Gateway 的环境变量或 secret 中，不写入前端与仓库。
+- CORS 不是认证；AI/TTS 接口仍需 Bearer token、限频和脱敏日志。
+- AI 结果是学习草稿，可能不准确，保存前应人工确认。
+- `backup/`、正式数据文件、`.env`、`.dev.vars`、Wrangler 本地状态和 `node_modules` 不应提交。
+
+## 测试
+
+```sh
+node --test
+node build.js
+git diff --check
+```

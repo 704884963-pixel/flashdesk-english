@@ -12,9 +12,13 @@
   <meta name="apple-mobile-web-app-title" content="FlashDesk">
   <link rel="apple-touch-icon" href="icon-180.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-  <script>window.FLASHDESK_BUILD = 'f6f00a5512';</script>
+  <script>window.FLASHDESK_BUILD = '9e0aac475b';</script>
 </head>
 <body>
+  <aside class="pwa-update-notice" id="pwa-update-notice" hidden role="status">
+    <span>新版本已准备好</span>
+    <button type="button" class="btn btn-primary" id="pwa-update-now">立即更新</button>
+  </aside>
   <div class="app">
     <header class="header">
       <div class="wordmark">
@@ -413,6 +417,8 @@ back: 智能体接收查询。</pre>
   <script src="batch-import.js" defer></script>
   <script src="article-utils.js" defer></script>
   <script src="article-store.js" defer></script>
+  <script src="reading-progress.js" defer></script>
+  <script src="pwa-update.js" defer></script>
   <script src="ai-learning.js" defer></script>
   <script src="usage-tracker.js" defer></script>
   <script src="backup.js" defer></script>

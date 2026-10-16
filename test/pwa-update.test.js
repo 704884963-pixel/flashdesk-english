@@ -91,15 +91,15 @@ test('offline navigation falls back to cached index.html', async () => {
   assert.equal(await result, h.fallback);
 });
 
-test('registration actively updates, activates waiting worker and reloads only once', () => {
+test('registration actively updates and hands controller changes to the manual update coordinator', () => {
   const app = source('public/app.js');
   const registration = app.slice(app.indexOf('function registerServiceWorker()'), app.indexOf('\nconst state'));
   assert.match(registration, /register\('\.\/sw\.js', \{ updateViaCache: 'none' \}\)/);
   assert.match(registration, /await registration\.update\(\)/);
   assert.match(registration, /registration\.waiting\?\.postMessage\(\{ type: 'SKIP_WAITING' \}\)/);
   assert.match(registration, /controllerchange/);
-  assert.match(registration, /reloadRequested \|\| sessionStorage\.getItem\(reloadKey\) === '1'/);
-  assert.equal((registration.match(/window\.location\.reload\(\)/g) || []).length, 1);
+  assert.match(registration, /coordinator\.controllerChanged\(\)/);
+  assert.doesNotMatch(registration, /controllerchange[\s\S]*?window\.location\.reload\(\)/);
 });
 
 test('PWA update code never clears localStorage or deletes IndexedDB databases', () => {
