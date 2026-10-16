@@ -386,6 +386,19 @@ back: 智能体接收查询。</pre>
     </div>
   </dialog>
 
+  <dialog id="restore-recovery-dialog" class="restore-recovery-dialog" aria-labelledby="restore-recovery-title">
+    <div class="form-panel">
+      <h3 id="restore-recovery-title">检测到未完成的备份恢复</h3>
+      <p id="restore-recovery-message"></p>
+      <p class="muted">在处理完成前，FlashDesk 会阻止学习数据写入；纯查看仍可继续。</p>
+      <p id="restore-recovery-status" class="muted" role="status" aria-live="assertive"></p>
+      <div class="form-actions">
+        <button type="button" class="btn" id="restore-recovery-later">暂不处理</button>
+        <button type="button" class="btn btn-primary" id="restore-recovery-run">恢复到操作前状态</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
   <script src="logic.js" defer></script>
   <script src="store.js" defer></script>
@@ -396,6 +409,7 @@ back: 智能体接收查询。</pre>
   <script src="ai-learning.js" defer></script>
   <script src="usage-tracker.js" defer></script>
   <script src="backup.js" defer></script>
+  <script src="restore-protocol.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

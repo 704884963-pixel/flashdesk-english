@@ -159,18 +159,19 @@ test('cancelled restore clears pending data without writing stores', () => {
   assert.match(section, /pending = null/); assert.doesNotMatch(section, /replaceSnapshot/);
 });
 test('confirmed restore replaces all four persistent domains and reloads', () => {
-  const section = app.slice(app.indexOf('async function restoreFullBackup'), app.indexOf('function renderBackupView'));
+  const section = app.slice(app.indexOf('async function applyFullBackupStages'), app.indexOf('function renderBackupView'));
   assert.match(section, /FlashStore\.replaceSnapshot/); assert.match(section, /ArticleStore\.replaceSnapshot/); assert.match(section, /setAiHistorySnapshot/);
   assert.match(section, /FlashBackup\.validate\(backup\)/);
-  assert.match(section, /usageTracker\.replaceStats\(validated\.usageStats\)/);
+  assert.match(section, /usageTracker\.replaceStats/);
+  assert.match(section, /restoreProtocol\.prepare/); assert.match(section, /restoreProtocol\.commitAndCleanup/);
   assert.match(app, /恢复成功[\s\S]*location\.reload/);
 });
 test('failed cross-store restore attempts rollback of learning, Articles, AI history and usage', () => {
-  const section = app.slice(app.indexOf('async function restoreFullBackup'), app.indexOf('function renderBackupView'));
-  assert.ok((section.match(/FlashStore\.replaceSnapshot/g) || []).length >= 2);
-  assert.ok((section.match(/ArticleStore\.replaceSnapshot/g) || []).length >= 2);
-  assert.match(section, /previousAiRaw/);
-  assert.match(section, /usageTracker\.replaceStats\(current\.usageStats\)/);
+  const section = app.slice(app.indexOf('async function applyFullBackupStages'), app.indexOf('function renderBackupView'));
+  assert.match(section, /restoreProtocol\.beginRollback/);
+  assert.match(section, /await applyFullBackupStages\(recovery\)/);
+  assert.match(section, /await restoreOriginalFromJournal\(\)/);
+  assert.match(section, /自动回滚未完全成功/);
 });
 test('old Browse-only data panel is no longer exposed as the full backup UI', () => {
   const views = app.slice(app.indexOf('function switchView'), app.indexOf('/* ---------- events'));

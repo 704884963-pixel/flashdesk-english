@@ -71,7 +71,7 @@ const state = {
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
     helperQuery: '', helperAnswer: '', helperLookup: null, helperLoading: false, helperError: '',
   },
-  backup: { pending: null, restoring: false },
+  backup: { pending: null, restoring: false, restoreBlocked: false, recovery: null },
 };
 
 function usageAreaForView(view) {
@@ -86,7 +86,7 @@ const usageTracker = typeof FlashUsageTracker !== 'undefined'
     getArea: () => usageAreaForView(state.view),
   })
   : {
-    start() {}, setArea() {}, exportStats: () => ({ version: 1, days: {} }), replaceStats() {},
+    start() {}, stop() {}, setArea() {}, exportStats: () => ({ version: 1, days: {} }), replaceStats() {},
     getTodayStats: () => ({ activeSeconds: 0, sessionCount: 0, areas: { review: 0, words: 0, aiLearning: 0, reading: 0, other: 0 } }),
     getRecentDaysStats: () => ({ totalSeconds: 0, averageSeconds: 0, validLearningDays: 0 }),
     getAllTimeStats: () => ({ totalSeconds: 0, activeDays: 0, calendarDays: 0, averageSecondsPerActiveDay: 0, averageSecondsPerCalendarDay: 0, longestStreak: 0, firstLearningDate: null }),
@@ -95,6 +95,10 @@ const usageTracker = typeof FlashUsageTracker !== 'undefined'
     getDailyGoalProgress: () => ({ goalMinutes: 20, activeSeconds: 0, percent: 0 }),
   };
 if (typeof window !== 'undefined') window.FlashDeskUsage = usageTracker;
+
+const restoreProtocol = typeof FlashRestoreProtocol !== 'undefined'
+  ? FlashRestoreProtocol.createProtocol({ storage: localStorage, validate: FlashBackup.validate })
+  : null;
 
 function freshSession() {
   return {
@@ -139,6 +143,13 @@ function learningStoreErrorMessage(error, prefix = '保存失败') {
   return `${prefix}：${error?.message || '未知错误'}`;
 }
 
+function assertRestoreResolved() {
+  if (!state.backup.restoreBlocked) return;
+  const error = new Error('检测到上一次备份恢复未完成。请先恢复到操作前状态，避免数据进一步混合。');
+  error.code = 'RESTORE_RECOVERY_REQUIRED';
+  throw error;
+}
+
 function wordDetails(card) {
   return {
     wordNumber: Number.isSafeInteger(card.wordNumber) && card.wordNumber > 0 ? card.wordNumber : null,
@@ -168,6 +179,7 @@ function newCardFields({ deck, front, back, memoryReading = '', chineseReading =
 }
 
 async function saveNewCard(fields) {
+  assertRestoreResolved();
   if (fields.deck === 'Words') {
     const resolution = FlashArticleUtils.resolveWordCard(state.cards, fields.front);
     if (resolution.status === 'exact' || resolution.status === 'form') {
@@ -1134,6 +1146,7 @@ async function grade(kind) {
   s.grading = true;
   let card;
   try {
+    assertRestoreResolved();
     ({ card } = await FlashStore.gradeCard(id, kind));
   } catch (err) {
     toast(learningStoreErrorMessage(err));
@@ -1169,6 +1182,7 @@ async function completeSession() {
     .map((c) => c.front);
   renderReview();
   try {
+    assertRestoreResolved();
     const res = await FlashStore.logSession({
       deck: state.deckFilter,
       reviewed: s.reviewed,
@@ -1808,6 +1822,7 @@ async function confirmBatchImport() {
   button.disabled = true;
   $('#batch-import-message').textContent = '正在保存…';
   try {
+    assertRestoreResolved();
     const fields = FlashBatchImport.importableFields(preview);
     const result = await FlashStore.importBatch(fields);
     state.cards.push(...result.cards);
@@ -1913,6 +1928,7 @@ function saveAiSettings(endpoint, token) {
 }
 
 function rememberAiGeneration(type, targets, primary = '') {
+  assertRestoreResolved();
   const targetWords = targets.map((item) => typeof item === 'string' ? item : item.front);
   const primaryWord = primary || (typeof targets[0] === 'string' ? targets[0] : targets[0]?.front) || '';
   aiHistory = FlashAiLearning.recordAiGeneration(aiHistory, { type, targetWords, primary: primaryWord });
@@ -2649,6 +2665,7 @@ async function saveArticleProgress(progress) {
   const article = state.article.current;
   if (!article || !progress) return;
   try {
+    assertRestoreResolved();
     const updated = await ArticleStore.updateProgress(article.id, progress);
     state.article.current = updated;
     const index = state.articles.findIndex((item) => item.id === updated.id);
@@ -2922,6 +2939,7 @@ async function saveAiMeaningSupplement(form) {
   if (!back) { error.hidden = false; error.textContent = '释义不能为空'; return; }
   save.disabled = true;
   try {
+    assertRestoreResolved();
     const details = wordDetails(card);
     const { card: updated } = await FlashStore.updateCard(card.id, {
       front: card.front, back,
@@ -2940,6 +2958,7 @@ async function saveAiMeaningSupplement(form) {
 
 async function setArticleUnknown(word, unknown, sentence = '') {
   try {
+    assertRestoreResolved();
     const words = await ArticleStore.setUnknownWord(word, unknown);
     state.article.unknownWords = new Set(FlashArticleUtils.normalizeUnknownWords(words));
     state.article.cache.clear();
@@ -3026,31 +3045,97 @@ async function exportFullBackup() {
   $('#backup-status').textContent = `已导出：${summary.words} 个单词、${summary.articles} 篇文章、${summary.history} 条 Review 记录。`;
 }
 
+async function applyFullBackupStages(backup) {
+  await restoreProtocol.apply(backup, {
+    replaceLearning: (learning) => FlashStore.replaceSnapshot(learning),
+    replaceArticles: (articles) => ArticleStore.replaceSnapshot(articles),
+    replaceAi: (aiLearning) => setAiHistorySnapshot(aiLearning),
+    replaceUsage: (usageStats) => usageTracker.replaceStats(usageStats),
+  });
+}
+
+async function restoreOriginalFromJournal() {
+  const recovery = restoreProtocol.beginRollback();
+  await applyFullBackupStages(recovery);
+  restoreProtocol.commitAndCleanup();
+  return recovery;
+}
+
 async function restoreFullBackup(backup) {
-  // Revalidate the complete pending backup at the final boundary before even
-  // reading current stores. This prevents stale/programmatically-mutated
-  // preview data from reaching the first persistent write.
+  // Both the target and the operation-before snapshot pass FD-03 validation
+  // before any persistent domain is changed.
   const validated = FlashBackup.validate(backup);
-  const current = await collectFullBackup();
-  const previousAiRaw = localStorage.getItem(AI_HISTORY_KEY);
+  assertRestoreResolved();
+  usageTracker.stop();
+  let current;
   try {
-    await FlashStore.replaceSnapshot(validated.learning);
-    await ArticleStore.replaceSnapshot(validated.articles);
-    setAiHistorySnapshot(validated.aiLearning);
-    usageTracker.replaceStats(validated.usageStats);
+    current = FlashBackup.validate(await collectFullBackup());
+    restoreProtocol.prepare(current, validated);
   } catch (error) {
+    usageTracker.start();
+    throw error;
+  }
+  state.backup.restoreBlocked = true;
+  try {
+    await applyFullBackupStages(validated);
+    restoreProtocol.commitAndCleanup();
+  } catch (error) {
+    // FD-01 conflicts stop immediately. The durable prepared journal remains,
+    // so a refreshed page can recover using a fresh FlashStore baseline.
     if (error?.code === 'STORE_CONFLICT') throw error;
-    const rollbackErrors = [];
-    try { await FlashStore.replaceSnapshot(current.learning); } catch (err) { rollbackErrors.push(err); }
-    try { await ArticleStore.replaceSnapshot(current.articles); } catch (err) { rollbackErrors.push(err); }
     try {
-      if (previousAiRaw === null) localStorage.removeItem(AI_HISTORY_KEY);
-      else localStorage.setItem(AI_HISTORY_KEY, previousAiRaw);
-      aiHistory = loadAiHistory();
-    } catch (err) { rollbackErrors.push(err); }
-    try { usageTracker.replaceStats(current.usageStats); } catch (err) { rollbackErrors.push(err); }
-    if (rollbackErrors.length) throw new Error(`恢复失败，自动回滚未完全成功：${error.message}`);
+      await restoreOriginalFromJournal();
+      state.backup.restoreBlocked = false;
+      usageTracker.start();
+    } catch (rollbackError) {
+      throw new Error(`恢复失败，自动回滚未完全成功：${error.message}；${rollbackError.message}`);
+    }
     throw new Error(`恢复失败，当前数据已回滚：${error.message}`);
+  }
+}
+
+function renderRestoreRecoveryPrompt(inspection) {
+  const dialog = $('#restore-recovery-dialog');
+  const recover = $('#restore-recovery-run');
+  const message = $('#restore-recovery-message');
+  const status = $('#restore-recovery-status');
+  status.textContent = '';
+  if (inspection.status === 'recovery_required') {
+    message.textContent = '上一次备份恢复未完成。继续学习可能导致数据进一步混合。';
+    recover.hidden = false;
+  } else if (inspection.status === 'corrupt') {
+    message.textContent = inspection.error || '恢复保护副本损坏，请不要继续修改学习数据。';
+    recover.hidden = true;
+  } else {
+    message.textContent = '备份恢复已经完成，但恢复日志尚未清理。请重新打开页面后再继续学习。';
+    recover.hidden = true;
+  }
+  if (!dialog.open) dialog.showModal();
+}
+
+function detectRestoreRecovery() {
+  if (!restoreProtocol) return { status: 'idle' };
+  const inspection = restoreProtocol.inspect();
+  state.backup.recovery = inspection;
+  state.backup.restoreBlocked = inspection.status !== 'idle';
+  if (state.backup.restoreBlocked) renderRestoreRecoveryPrompt(inspection);
+  return inspection;
+}
+
+async function recoverInterruptedRestore() {
+  const button = $('#restore-recovery-run');
+  button.disabled = true;
+  $('#restore-recovery-later').disabled = true;
+  $('#restore-recovery-status').textContent = '正在恢复到操作前状态…';
+  try {
+    await restoreOriginalFromJournal();
+    $('#restore-recovery-status').textContent = '已恢复到操作前状态，正在重新加载…';
+    setTimeout(() => location.reload(), 300);
+  } catch (error) {
+    state.backup.restoreBlocked = true;
+    $('#restore-recovery-status').textContent = `恢复失败：${error.message}`;
+    button.disabled = false;
+    $('#restore-recovery-later').disabled = false;
   }
 }
 
@@ -3261,6 +3346,13 @@ function bindEvents() {
     setMoreMenuOpen(false);
     $('#nav-more-toggle').focus();
   });
+
+  $('#restore-recovery-dialog').addEventListener('cancel', (e) => e.preventDefault());
+  $('#restore-recovery-later').addEventListener('click', () => {
+    $('#restore-recovery-dialog').close();
+    toast('恢复保护仍待处理，学习数据写入已暂停。');
+  });
+  $('#restore-recovery-run').addEventListener('click', recoverInterruptedRestore);
 
   $('#backup-export').addEventListener('click', async (e) => {
     const button = e.currentTarget;
@@ -3519,6 +3611,7 @@ function bindEvents() {
     save.disabled = true;
     $('#article-form-message').textContent = '正在保存…';
     try {
+      assertRestoreResolved();
       const article = await ArticleStore.create({
         title: $('#article-title').value,
         source: $('#article-source').value,
@@ -3584,6 +3677,7 @@ function bindEvents() {
       const article = state.articles.find((item) => item.id === button.dataset.articleDelete);
       if (!article || !confirm('确定删除这篇文章？')) return;
       try {
+        assertRestoreResolved();
         await ArticleStore.delete(article.id);
         state.articles = state.articles.filter((item) => item.id !== article.id);
         state.article.cache.delete(article.id);
@@ -3716,6 +3810,7 @@ function bindEvents() {
       if (!preview || preview.type !== 'article') return;
       button.disabled = true;
       try {
+        assertRestoreResolved();
         // The optional paragraphTranslations field travels with the Article so
         // Reading can offer the same per-paragraph help later.
         const article = await ArticleStore.create({
@@ -3809,6 +3904,7 @@ function bindEvents() {
     }
     const id = btn.dataset.del;
     try {
+      assertRestoreResolved();
       await FlashStore.deleteCard(id);
       state.cards = state.cards.filter((c) => c.id !== id);
       renderDeckControls();
@@ -3843,6 +3939,7 @@ function bindEvents() {
     save.disabled = true;
     $('#edit-cancel').disabled = true;
     try {
+      assertRestoreResolved();
       const { card } = await FlashStore.updateCard(id, fields);
       const index = state.cards.findIndex((c) => c.id === card.id);
       if (index !== -1) state.cards[index] = card;
@@ -3889,6 +3986,7 @@ function bindEvents() {
       return;
     }
     try {
+      assertRestoreResolved();
       const summary = await FlashStore.importData(text);
       const summaryLabel = summary
         .replace(/^Merged (\d+) new cards? \((\d+) duplicates? skipped\)\.$/, '已合并 $1 张新卡片（跳过 $2 张重复卡片）。')
@@ -3906,6 +4004,7 @@ function bindEvents() {
 async function init() {
   renderBuildVersion();
   bindEvents();
+  detectRestoreRecovery();
   renderAiPronunciationSpeakerSetting();
   initSpeechSettings();
   renderTtsSettings();
@@ -3935,7 +4034,7 @@ async function init() {
   await refreshAudioCacheStats();
   renderDeckControls();
   switchView('review');
-  usageTracker.start();
+  if (!state.backup.restoreBlocked) usageTracker.start();
 }
 
 registerServiceWorker();

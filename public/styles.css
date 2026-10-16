@@ -706,6 +706,8 @@ select:focus, input:focus, textarea:focus {
 }
 .article-action-dialog { width: min(520px, calc(100vw - 28px)); max-height: min(78vh, 680px); margin: auto; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
 .article-action-dialog::backdrop { background: #0009; }
+.restore-recovery-dialog { width: min(520px, calc(100vw - 28px)); margin: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
+.restore-recovery-dialog::backdrop { background: #000b; }
 .article-sheet { display: grid; gap: 12px; padding: 22px 22px 8px; }
 .article-sheet h3 { font-family: var(--display); font-size: 1.7rem; overflow-wrap: anywhere; }
 .article-sheet-sentence { font-size: 1.05rem; line-height: 1.65; overflow-wrap: anywhere; }

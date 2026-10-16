@@ -15,6 +15,7 @@ const ASSETS = [
   'ai-learning.js',
   'usage-tracker.js',
   'backup.js',
+  'restore-protocol.js',
   'logic.js',
   'store.js',
   'default-data.json',

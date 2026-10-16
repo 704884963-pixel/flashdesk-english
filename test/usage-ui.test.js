@@ -324,9 +324,10 @@ test('the all-time grid collapses to one min-width-safe column on phones', () =>
 
 /* ---------- 16. no duplicate timers ---------- */
 
-test('the tracker is created once and started once', () => {
+test('the tracker is created once and starts normally only when restore is resolved', () => {
   assert.equal((appSource.match(/FlashUsageTracker\.createTracker\(/g) || []).length, 1);
-  assert.equal((appSource.match(/usageTracker\.start\(\)/g) || []).length, 1);
+  assert.match(appSource, /if \(!state\.backup\.restoreBlocked\) usageTracker\.start\(\)/);
+  assert.match(appSource, /usageTracker\.stop\(\)[\s\S]*restoreProtocol\.prepare/);
 });
 
 /* ---------- 17. view switching drives the area ---------- */
@@ -358,7 +359,7 @@ test('full backup still carries usage stats and the restore summary mentions it'
   assert.match(backup, /usageStats/);
   assert.match(backup, /normalizeUsageStats/);
   assert.match(appSource, /usageStats: usageTracker\.exportStats\(\)/);
-  assert.match(appSource, /usageTracker\.replaceStats\(validated\.usageStats\)/);
+  assert.match(appSource, /replaceUsage: \(usageStats\) => usageTracker\.replaceStats\(usageStats\)/);
   const summary = appSource.slice(appSource.indexOf('function backupSummaryHtml'), appSource.indexOf('function renderBackupView'));
   assert.match(summary, /学习统计[\s\S]*已包含/);
 });
