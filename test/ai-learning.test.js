@@ -20,6 +20,45 @@ const aiRootClickHandler = (source) => source.slice(
   source.indexOf(`${DOLLAR}('#add-form').addEventListener('submit'`),
 );
 
+function wordDialogHarness(cards, word, result = null, cardId = '') {
+  const section = appSource.slice(appSource.indexOf('function aiLookupExistingResolution'), appSource.indexOf('async function lookupAiSentenceWord'));
+  const content = { innerHTML: '' };
+  const dialog = { open: false, showModal() { this.open = true; } };
+  const sandbox = {
+    FlashArticleUtils: ArticleUtils,
+    FlashAiLearning: {
+      lookupCacheKey: () => 'lookup',
+      mergeMeanings: (left) => String(left || ''),
+      wordDraftFromLookup: () => ({ front: word, back: '', memoryReading: '', chineseReading: '', forms: [] }),
+    },
+    state: {
+      cards,
+      ai: { lookupCache: new Map(result ? [['lookup', result]] : []) },
+      article: { unknownWords: new Set() },
+    },
+    wordDetails: (card) => ({
+      wordNumber: Number.isSafeInteger(card.wordNumber) ? card.wordNumber : null,
+      memoryReading: card.memoryReading || '', chineseReading: card.chineseReading || '', forms: card.forms || [],
+    }),
+    esc: (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])),
+    $: (selector) => selector === '#article-action-content' ? content : dialog,
+  };
+  vm.runInNewContext(`${section}\nopenAiSentenceWord(${JSON.stringify(word)}, '', { cardId: ${JSON.stringify(cardId)} });`, sandbox);
+  return content.innerHTML;
+}
+
+function helperLookupHarness(cards, word, result) {
+  const helper = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
+  const resolver = appSource.slice(appSource.indexOf('function aiLookupExistingResolution'), appSource.indexOf('function openAiSentenceWord'));
+  const sandbox = {
+    FlashArticleUtils: ArticleUtils,
+    state: { cards },
+    esc: (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])),
+  };
+  vm.runInNewContext(`${resolver}\n${helper}\nglobalThis.__html = helperLookupHtml(${JSON.stringify({ word, result })});`, sandbox);
+  return sandbox.__html;
+}
+
 test('AI target selector only selects Words', () => assert.deepEqual(Ai.selectAiTargetWords({ cards: [word('one'), { deck: 'Sentences', front: 'sentence' }], count: 5, now }).map((x) => x.front), ['one']));
 test('currently weak Words receive first priority', () => assert.equal(Ai.selectAiTargetWords({ cards: [word('ordinary'), word('lapsed', { lapses: 2, streak: 0 })], count: 1, now })[0].front, 'lapsed'));
 test('recovered historical lapses do not receive unresolved-error priority', () => {
@@ -354,7 +393,8 @@ test('generated Article word click passes its current Sentence to the shared loo
 test('generated Article Words and forms show local data and still request contextual AI', () => {
   const show = appSource.slice(appSource.indexOf('async function showAiSentenceWord'), appSource.indexOf('function refreshAiSentenceWordLookup'));
   assert.match(show, /await lookupAiSentenceWord/);
-  assert.match(appSource, /const card = aiLookupExistingCard\(word, result\)/);
+  assert.match(appSource, /const resolution = aiLookupExistingResolution\(word, result\)/);
+  assert.match(appSource, /const card = selected \|\| resolution\.card \|\| null/);
   assert.match(appSource, /FlashArticleUtils\.buildWordLookup\(state\.cards\)/);
 });
 test('saving an inline Word refreshes both Sentence and Article preview lookups', () => {
@@ -549,9 +589,9 @@ test('other English helper shortcuts immediately build their final helper querie
 test('English helper shortcuts reject empty input before any AI request', () => assert.throws(() => Ai.buildEnglishHelperShortcutRequest('lookup', ' '), /不能为空/));
 test('AI Sentence rendering reuses the Article word tokenizer', () => assert.match(appSource, /function interactiveWordHtml[\s\S]*?FlashArticleUtils\.wordTokens/));
 test('AI Sentence word tokens are clickable while punctuation stays outside token spans', () => { assert.match(appSource, /data-ai-sentence-word/); assert.match(appSource, /value\.slice\(position, token\.index\)/); });
-test('existing front and forms lookup reuse the canonical Article lookup', () => { const lookup = ArticleUtils.buildWordLookup([{ deck: 'Words', front: 'expect', forms: ['expected'] }]); assert.equal(lookup.get('expect').front, 'expect'); assert.equal(lookup.get('expected').front, 'expect'); });
-test('existing Word lookup remains case-insensitive', () => assert.equal(ArticleUtils.buildWordLookup([{ deck: 'Words', front: 'Expect' }]).get('expect').front, 'Expect'));
-test('existing AI Sentence Word is shown directly before an inline draft', () => assert.match(appSource, /function openAiSentenceWord[\s\S]*?const card = aiLookupExistingCard\(word, result\)[\s\S]*?result && !card/));
+test('existing front and forms lookup reuse the canonical resolver', () => { const cards = [{ id: 'expect', deck: 'Words', front: 'expect', forms: ['expected'] }]; assert.equal(ArticleUtils.resolveWordCard(cards, 'expect').status, 'exact'); assert.equal(ArticleUtils.resolveWordCard(cards, 'expected').card.front, 'expect'); });
+test('existing Word resolver remains case-insensitive', () => assert.equal(ArticleUtils.resolveWordCard([{ id: 'expect', deck: 'Words', front: 'Expect' }], 'expect').card.front, 'Expect'));
+test('existing AI Sentence Word is shown directly before an inline draft', () => assert.match(appSource, /function openAiSentenceWord[\s\S]*?const resolution = aiLookupExistingResolution\(word, result\)[\s\S]*?result && !card/));
 test('unknown AI Sentence Word starts lookup immediately without an AI lookup button', () => {
   const handler = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
   assert.match(handler, /await showAiSentenceWord\(word\.dataset\.aiSentenceWord, sentence\.english\)/);
@@ -610,9 +650,74 @@ test('structured helper lookup renders core meaning, up to four senses, context 
 });
 test('helper lookup uses canonical front/forms/baseForm duplicate matching and hides add for existing cards', () => {
   const section = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
-  assert.match(section, /aiLookupExistingCard\(clickedWord, result\)/);
+  assert.match(section, /aiLookupExistingResolution\(clickedWord, result\)/);
   assert.match(section, /原形[\s\S]*?已在词库/);
-  assert.match(section, /card \? '' : `[\s\S]*?加入词库/);
+  assert.match(section, /card \|\| ambiguous \? '' : `[\s\S]*?加入词库/);
+});
+test('AI helper ambiguity lists candidates and never silently adds or binds the first card', () => {
+  const helper = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
+  assert.match(helper, /resolution\.status === 'ambiguous'/);
+  assert.match(helper, /data-ai-helper-word-candidate/);
+  assert.match(helper, /card \|\| ambiguous \? ''/);
+  const handler = aiRootClickHandler(appSource);
+  assert.match(handler, /dataset\.aiHelperWordCandidate[\s\S]*?cardId: button\.dataset\.aiHelperWordCandidate/);
+});
+test('AI helper prefers an exact clicked front over the AI-reported base form', () => {
+  const html = helperLookupHarness([
+    { id: 'see', deck: 'Words', front: 'see', back: '看见', forms: ['saw'], wordNumber: 1 },
+    { id: 'saw', deck: 'Words', front: 'saw', back: '锯子；锯', forms: [], wordNumber: 2 },
+  ], 'saw', { word: 'saw', baseForm: 'see', meaningZh: '看见', senses: [] });
+  assert.match(html, /✓ 已在词库 #2/);
+  assert.doesNotMatch(html, /原形 see 已在词库/);
+  assert.doesNotMatch(html, /data-ai-helper-add-word/);
+});
+test('AI helper shows ambiguity and suppresses add when several forms match', () => {
+  const html = helperLookupHarness([
+    { id: 'alpha', deck: 'Words', front: 'alpha', back: '甲', forms: ['shared'], wordNumber: 1 },
+    { id: 'beta', deck: 'Words', front: 'beta', back: '乙', forms: ['shared'], wordNumber: 2 },
+  ], 'shared', { word: 'shared', baseForm: '', meaningZh: '共享', senses: [] });
+  assert.match(html, /这个词可能对应多个词条，请选择/);
+  assert.match(html, /#1 alpha · 甲/);
+  assert.match(html, /#2 beta · 乙/);
+  assert.doesNotMatch(html, /data-ai-helper-add-word/);
+});
+test('Reading ambiguity renders selectable cards and does not auto-open the first candidate', () => {
+  const dialog = appSource.slice(appSource.indexOf('function aiLookupExistingResolution'), appSource.indexOf('async function lookupAiSentenceWord'));
+  assert.match(dialog, /resolution\.status === 'ambiguous'/);
+  assert.match(dialog, /这个词可能对应多个词条，请选择/);
+  assert.match(dialog, /data-ai-word-candidate/);
+  assert.match(dialog, /resolution\.candidates\.find\(\(candidate\) => candidate\.id === cardId\)/);
+  const actions = appSource.slice(appSource.indexOf("$('#article-action-content').addEventListener('click'"), appSource.indexOf("$('#article-action-content').addEventListener('submit'"));
+  assert.match(actions, /dataset\.aiWordCandidate[\s\S]*?cardId: button\.dataset\.aiWordCandidate/);
+});
+test('Reading saw opens the exact saw card even when see lists saw as a form', () => {
+  const html = wordDialogHarness([
+    { id: 'see', deck: 'Words', front: 'see', back: '看见', forms: ['saw'], wordNumber: 1 },
+    { id: 'saw', deck: 'Words', front: 'saw', back: '锯子；锯', forms: [], wordNumber: 2 },
+  ], 'saw', { word: 'saw', baseForm: 'see', meaningZh: '看见', meaningInContextZh: '', memoryReading: '', chineseReading: '' });
+  assert.match(html, /已在单词库：#2 saw/);
+  assert.match(html, /锯子；锯/);
+  assert.doesNotMatch(html, /已在单词库：#1 see/);
+});
+test('Reading shared form renders both choices until the learner selects one', () => {
+  const cards = [
+    { id: 'alpha', deck: 'Words', front: 'alpha', back: '甲', forms: ['shared'], wordNumber: 1 },
+    { id: 'beta', deck: 'Words', front: 'beta', back: '乙', forms: ['shared'], wordNumber: 2 },
+  ];
+  const choices = wordDialogHarness(cards, 'shared');
+  assert.match(choices, /这个词可能对应多个词条，请选择/);
+  assert.match(choices, /#1 alpha · 甲/);
+  assert.match(choices, /#2 beta · 乙/);
+  assert.doesNotMatch(choices, /已在单词库：/);
+  const selected = wordDialogHarness(cards, 'shared', null, 'beta');
+  assert.match(selected, /已在单词库：#2 beta/);
+});
+test('inline and single Word creation reject unique-form duplicates and ambiguous forms before persistence', () => {
+  const save = appSource.slice(appSource.indexOf('async function saveNewCard'), appSource.indexOf('function wordBackHtml'));
+  assert.match(save, /resolveWordCard\(state\.cards, fields\.front\)/);
+  assert.ok(save.indexOf('resolveWordCard') < save.indexOf('FlashStore.addCard'));
+  assert.match(save, /resolution\.status === 'form'/);
+  assert.match(save, /resolution\.status === 'ambiguous'/);
 });
 test('helper add opens the existing inline editor and never auto-saves', () => {
   const handler = aiRootClickHandler(appSource);
@@ -742,7 +847,7 @@ test('shared new-card save keeps returned numbering state in sync', () => {
 });
 test('inline AI save handles duplicates as existing Words without creating another card', () => {
   const section = appSource.slice(appSource.indexOf('async function saveInlineAiWord'), appSource.indexOf('async function setArticleUnknown'));
-  assert.match(section, /buildWordLookup\(state\.cards\)\.get/);
+  assert.match(section, /resolveWordCard\(state\.cards, fields\.front\)/);
   assert.match(section, /openAiSentenceWord\(word, sentence, \{ reading:/);
 });
 test('inline AI save refreshes lookup without replacing the generated result', () => {

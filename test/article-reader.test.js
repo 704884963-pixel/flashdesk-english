@@ -104,6 +104,59 @@ test('coverage measures token matches rather than unique matches', () => {
 });
 test('Word front enters the learned lookup', () => assert.equal(Utils.buildWordLookup([{ deck: 'Words', front: 'expect' }]).get('expect').front, 'expect'));
 test('Word forms enter the learned lookup', () => assert.equal(Utils.buildWordLookup([{ deck: 'Words', front: 'expect', forms: ['expected'] }]).get('expected').front, 'expect'));
+test('word resolver gives exact front priority over another card form', () => {
+  const cards = [
+    { id: 'see', deck: 'Words', front: 'see', forms: ['saw', 'seen', 'seeing'] },
+    { id: 'saw', deck: 'Words', front: 'saw', forms: [] },
+  ];
+  const result = Utils.resolveWordCard(cards, 'saw');
+  assert.equal(result.status, 'exact');
+  assert.equal(result.card.id, 'saw');
+  assert.equal(Utils.buildWordLookup(cards).get('saw').id, 'saw');
+});
+test('word resolver returns one unique forms match', () => {
+  const result = Utils.resolveWordCard([
+    { id: 'expect', deck: 'Words', front: 'expect', forms: ['expects', 'expected', 'expecting'] },
+  ], ' expected ');
+  assert.equal(result.status, 'form');
+  assert.equal(result.card.id, 'expect');
+});
+test('word resolver reports multiple forms matches as ambiguous instead of choosing first', () => {
+  const cards = [
+    { id: 'alpha', deck: 'Words', front: 'alpha', forms: ['sharedform'] },
+    { id: 'beta', deck: 'Words', front: 'beta', forms: ['sharedform'] },
+  ];
+  const result = Utils.resolveWordCard(cards, 'sharedform');
+  assert.equal(result.status, 'ambiguous');
+  assert.deepEqual(result.candidates.map((card) => card.id), ['alpha', 'beta']);
+  assert.equal(Utils.buildWordLookup(cards).has('sharedform'), true);
+  assert.equal(Utils.buildWordLookup(cards).get('sharedform'), null);
+});
+test('exact front beats several competing forms matches', () => {
+  const result = Utils.resolveWordCard([
+    { id: 'exact', deck: 'Words', front: 'exactword', forms: [] },
+    { id: 'one', deck: 'Words', front: 'other1', forms: ['exactword'] },
+    { id: 'two', deck: 'Words', front: 'other2', forms: ['exactword'] },
+  ], 'exactword');
+  assert.equal(result.status, 'exact');
+  assert.equal(result.card.id, 'exact');
+});
+test('word resolver exact matching is trim and case insensitive', () => {
+  const result = Utils.resolveWordCard([{ id: 'saw', deck: 'Words', front: 'Saw', forms: [] }], ' saw ');
+  assert.equal(result.status, 'exact');
+  assert.equal(result.card.front, 'Saw');
+});
+test('word resolver reports duplicate exact fronts as ambiguous', () => {
+  const result = Utils.resolveWordCard([
+    { id: 'one', deck: 'Words', front: 'Same', forms: [] },
+    { id: 'two', deck: 'Words', front: 'same', forms: [] },
+  ], 'same');
+  assert.equal(result.status, 'ambiguous');
+  assert.deepEqual(result.candidates.map((card) => card.id), ['one', 'two']);
+});
+test('word resolver returns none when neither front nor forms match', () => {
+  assert.deepEqual(Utils.resolveWordCard([{ id: 'expect', deck: 'Words', front: 'expect', forms: ['expected'] }], 'unknown'), { status: 'none' });
+});
 test('learned lookup matching ignores case', () => assert.equal(Utils.articleCoverage('EXPECTED', [{ deck: 'Words', front: 'expect', forms: ['expected'] }]).percent, 100));
 test('punctuation does not affect a learned match', () => assert.equal(Utils.articleCoverage('(expect),', [{ deck: 'Words', front: 'expect' }]).percent, 100));
 test('Sentence duplicate uses exact trimmed front comparison', () => {

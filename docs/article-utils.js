@@ -126,15 +126,34 @@
 
   const wordKey = (value) => String(value || '').trim().toLowerCase();
 
+  function resolveWordCard(cards, rawWord) {
+    const key = wordKey(rawWord);
+    if (!key) return { status: 'none' };
+    const words = (cards || []).filter((card) => card?.deck === 'Words');
+    const exact = words.filter((card) => wordKey(card.front) === key);
+    if (exact.length === 1) return { status: 'exact', card: exact[0] };
+    if (exact.length > 1) return { status: 'ambiguous', candidates: exact };
+
+    const forms = words.filter((card) => Array.isArray(card.forms)
+      && card.forms.some((form) => wordKey(form) === key));
+    if (forms.length === 1) return { status: 'form', card: forms[0] };
+    if (forms.length > 1) return { status: 'ambiguous', candidates: forms };
+    return { status: 'none' };
+  }
+
   function buildWordLookup(cards) {
     const lookup = new Map();
+    const keys = new Set();
     for (const card of cards || []) {
       if (card?.deck !== 'Words' || typeof card.front !== 'string' || !card.front.trim()) continue;
       const values = [card.front, ...(Array.isArray(card.forms) ? card.forms : [])];
-      for (const value of values) {
-        const key = wordKey(value);
-        if (key && !lookup.has(key)) lookup.set(key, card);
-      }
+      values.map(wordKey).filter(Boolean).forEach((key) => keys.add(key));
+    }
+    for (const key of keys) {
+      const resolution = resolveWordCard(cards, key);
+      // A null value deliberately preserves boolean learned/coverage matching
+      // while preventing callers from treating an ambiguous form as a card.
+      lookup.set(key, resolution.card || null);
     }
     return lookup;
   }
@@ -195,7 +214,7 @@
 
   const FlashArticleUtils = {
     normalizeContent, normalizeParagraphTranslations, safeExternalUrl, normalizeArticleInput, splitParagraphs, splitSentences,
-    wordTokens, wordKey, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
+    wordTokens, wordKey, resolveWordCard, buildWordLookup, articleCoverage, analyzeArticle, articleSpeechSegments, articleSpeechParagraphs,
     normalizeUnknownWords, recognitionRate, normalizeProgress, sentenceExists,
   };
   if (typeof window !== 'undefined') window.FlashArticleUtils = FlashArticleUtils;

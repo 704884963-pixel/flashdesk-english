@@ -161,6 +161,15 @@ function newCardFields({ deck, front, back, memoryReading = '', chineseReading =
 }
 
 async function saveNewCard(fields) {
+  if (fields.deck === 'Words') {
+    const resolution = FlashArticleUtils.resolveWordCard(state.cards, fields.front);
+    if (resolution.status === 'exact' || resolution.status === 'form') {
+      throw new Error(`单词已存在：${resolution.card.front}`);
+    }
+    if (resolution.status === 'ambiguous') {
+      throw new Error('该词形可能对应多个已有词条，请选择已有词条或修改英文单词');
+    }
+  }
   const { card } = await FlashStore.addCard(fields);
   state.cards.push(card);
   if (card.deck === 'Words' && Number.isSafeInteger(card.wordNumber)) {
@@ -2223,7 +2232,9 @@ function helperLookupHtml(entry) {
   const { result } = entry;
   const clickedWord = String(entry.word || result.word || '').trim();
   const baseForm = String(result.baseForm || result.word || clickedWord).trim();
-  const card = aiLookupExistingCard(clickedWord, result);
+  const resolution = aiLookupExistingResolution(clickedWord, result);
+  const card = resolution.card || null;
+  const ambiguous = resolution.status === 'ambiguous';
   const details = (label, value) => value
     ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   const senses = Array.isArray(result.senses) ? result.senses.slice(0, 4) : [];
@@ -2232,7 +2243,7 @@ function helperLookupHtml(entry) {
   const normalizedCard = card ? FlashArticleUtils.wordKey(card.front) : '';
   const existing = card ? `<div class="ai-helper-existing">
     ${normalizedClicked && normalizedClicked !== normalizedCard ? `<div>${esc(clickedWord)} → ${esc(card.front)}</div><strong>✓ 原形 ${esc(card.front)} 已在词库${number}</strong>` : `<strong>✓ 已在词库${number}</strong>`}
-  </div>` : '';
+  </div>` : ambiguous ? wordMatchCandidatesHtml(resolution, clickedWord, '', false, 'data-ai-helper-word-candidate') : '';
   return `<article class="ai-helper-lookup" aria-live="polite">
     <header class="ai-helper-word-head"><h3>${esc(baseForm)}</h3>${result.pos ? `<span>${esc(result.pos)}</span>` : ''}</header>
     ${details('核心义', result.coreMeaningZh || result.meaningZh)}
@@ -2242,7 +2253,7 @@ function helperLookupHtml(entry) {
     ${details('🗣 中文近似', result.chineseReading)}
     ${existing}
     <div class="form-actions"><button type="button" class="btn" data-ai-pronounce="${esc(clickedWord)}">AI发音</button>
-      ${card ? '' : `<button type="button" class="btn btn-primary" data-ai-helper-add-word="${esc(clickedWord)}">加入词库</button>`}
+      ${card || ambiguous ? '' : `<button type="button" class="btn btn-primary" data-ai-helper-add-word="${esc(clickedWord)}">加入词库</button>`}
     </div>
   </article>`;
 }
@@ -2724,19 +2735,36 @@ function openArticleWord(word, sentence) {
   return lookupAiSentenceWord(word, sentence, { reading: true });
 }
 
-function aiLookupExistingCard(word, result) {
-  const lookup = FlashArticleUtils.buildWordLookup(state.cards);
+function aiLookupExistingResolution(word, result) {
+  const direct = FlashArticleUtils.resolveWordCard(state.cards, word);
+  if (direct.status !== 'none') return direct;
   const baseForm = String(result?.baseForm || '').trim();
-  return (baseForm && lookup.get(FlashArticleUtils.wordKey(baseForm)))
-    || lookup.get(FlashArticleUtils.wordKey(word)) || null;
+  return baseForm ? FlashArticleUtils.resolveWordCard(state.cards, baseForm) : direct;
+}
+
+function aiLookupExistingCard(word, result) {
+  return aiLookupExistingResolution(word, result).card || null;
+}
+
+function wordMatchCandidatesHtml(resolution, word, sentence = '', reading = false, attribute = 'data-ai-word-candidate') {
+  if (resolution?.status !== 'ambiguous') return '';
+  return `<div class="ai-word-ambiguity"><p>这个词可能对应多个词条，请选择：</p><div class="ai-word-candidates">
+    ${resolution.candidates.map((candidate) => `<button type="button" class="btn" ${attribute}="${esc(candidate.id)}" data-ai-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">
+      ${Number.isSafeInteger(candidate.wordNumber) ? `#${candidate.wordNumber} ` : ''}${esc(candidate.front)} · ${esc(candidate.back)}
+    </button>`).join('')}
+  </div></div>`;
 }
 
 function openAiSentenceWord(word, sentence, {
-  error = '', editing = false, loading = false, meaningEditing = false, reading = false,
+  error = '', editing = false, loading = false, meaningEditing = false, reading = false, cardId = '',
 } = {}) {
   const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
   const result = state.ai.lookupCache.get(cacheKey) || null;
-  const card = aiLookupExistingCard(word, result);
+  const resolution = aiLookupExistingResolution(word, result);
+  const selected = resolution.status === 'ambiguous'
+    ? resolution.candidates.find((candidate) => candidate.id === cardId) || null : null;
+  const ambiguous = resolution.status === 'ambiguous' && !selected;
+  const card = selected || resolution.card || null;
   const unknown = reading && state.article.unknownWords.has(FlashArticleUtils.wordKey(word));
   const details = card ? wordDetails(card) : null;
   const memoryReading = card ? details.memoryReading || result?.memoryReading || '' : '';
@@ -2748,7 +2776,8 @@ function openAiSentenceWord(word, sentence, {
     ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   $('#article-action-content').innerHTML = `<div class="article-sheet">
     <div class="micro-label">当前单词</div><h3>${esc(word)}</h3>
-    ${card ? `<p class="article-learned-label">已在单词库：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
+    ${ambiguous ? wordMatchCandidatesHtml(resolution, word, sentence, reading)
+      : card ? `<p class="article-learned-label">已在单词库：${details.wordNumber ? `#${details.wordNumber} ` : ''}${esc(card.front)}</p>
       ${detail('词库释义', card.back)}
       ${detail('🧠 发音拆解', memoryReading)}
       ${detail('🗣 中文近似', chineseReading)}
@@ -2784,7 +2813,7 @@ function openAiSentenceWord(word, sentence, {
         ? `<button type="button" class="btn" data-article-known="${esc(word)}" data-article-sentence="${esc(sentence)}">我现在认识了</button>`
         : `<button type="button" class="btn" data-article-unknown="${esc(word)}" data-article-sentence="${esc(sentence)}">标记不认识</button>`) : ''}
       ${canSupplement && !meaningEditing ? `<button type="button" class="btn" data-ai-merge-meaning="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">＋补充到词库释义</button>` : ''}
-      ${card || loading || editing ? ''
+      ${ambiguous || card || loading || editing ? ''
         : error ? `<button type="button" class="btn" data-ai-retry-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">重试</button>`
         : result ? `<button type="button" class="btn btn-primary" data-ai-edit-word="${esc(word)}" data-ai-sentence="${esc(sentence)}" data-ai-reading="${reading}">加入单词库</button>` : ''}
     </div></div>`;
@@ -2852,7 +2881,8 @@ async function saveInlineAiWord(form) {
     if (label) label.textContent = `✓ 已加入 ${card.wordNumber ? `#${card.wordNumber} ` : ''}${card.front}`;
     if (state.ai.mode === 'helper') renderAiHelper();
   } catch (err) {
-    const existing = FlashArticleUtils.buildWordLookup(state.cards).get(FlashArticleUtils.wordKey(fields.front));
+    const resolution = FlashArticleUtils.resolveWordCard(state.cards, fields.front);
+    const existing = resolution.card || null;
     if (existing) {
       const cacheKey = FlashAiLearning.lookupCacheKey(word, sentence);
       const result = state.ai.lookupCache.get(cacheKey);
@@ -3554,7 +3584,11 @@ function bindEvents() {
   $('#article-action-content').addEventListener('click', async (e) => {
     const button = e.target.closest('button');
     if (!button) return;
-    if (button.dataset.aiPronounce !== undefined) {
+    if (button.dataset.aiWordCandidate !== undefined) {
+      openAiSentenceWord(button.dataset.aiWord, button.dataset.aiSentence, {
+        reading: button.dataset.aiReading === 'true', cardId: button.dataset.aiWordCandidate,
+      });
+    } else if (button.dataset.aiPronounce !== undefined) {
       await playAiPronunciation(button.dataset.aiPronounce, button);
     } else if (button.dataset.articleSpeak !== undefined) {
       playEnglish(button.dataset.articleSpeak, { rate: Number(button.dataset.rate) || 1, button });
@@ -3624,6 +3658,8 @@ function bindEvents() {
       await askEnglishHelper();
     } else if (button.dataset.aiHelperAddWord !== undefined) {
       openAiSentenceWord(button.dataset.aiHelperAddWord, '', { editing: true });
+    } else if (button.dataset.aiHelperWordCandidate !== undefined) {
+      openAiSentenceWord(button.dataset.aiWord, '', { cardId: button.dataset.aiHelperWordCandidate });
     } else if (button.hasAttribute('data-ai-home')) {
       stopAiArticleNarration(false);
       state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; renderAiHome();
