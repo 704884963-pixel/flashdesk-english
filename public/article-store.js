@@ -32,5 +32,10 @@
     listAiDrafts: async () => (await api('/api/articles/drafts')).drafts,
     saveAiDraft: async (draft) => (await api('/api/articles/drafts', json('POST', draft))).draft,
     deleteAiDraft: (id) => api(`/api/articles/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    listSongs: async () => (await api('/api/articles/songs')).songs,
+    getSong: async (id) => (await api(`/api/articles/songs/${encodeURIComponent(id)}`)).song,
+    createSong: async (song) => (await api('/api/articles/songs', json('POST', song))).song,
+    updateSong: async (id, song) => (await api(`/api/articles/songs/${encodeURIComponent(id)}`, json('PUT', song))).song,
+    deleteSong: (id) => api(`/api/articles/songs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   };
 })();

@@ -266,7 +266,7 @@
   }
 
   function buildAiRequest(task, context, options = {}) {
-    if (!['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper'].includes(task)) throw new Error('unknown AI task');
+    if (!['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper', 'organize_lyrics', 'explain_lyric'].includes(task)) throw new Error('unknown AI task');
     return { task, context, options };
   }
 
@@ -303,13 +303,21 @@
     const value = String(input || '').trim();
     if (!value) throw new Error('问题不能为空');
     if (action === 'lookup') return buildLookupWordRequest(value, '');
-    const prompts = {
-      synonyms: `请给出 ${value} 的常见近义词和区别`,
-      difference: `请比较 ${value} 的词义区别`,
-      example: `请给 ${value} 一个适合 CET-4 以下水平的简单例句`,
-    };
+    const prompts = { example: `请给 ${value} 一个适合 CET-4 以下水平的简单例句` };
     if (!prompts[action]) throw new Error('unknown helper action');
     return buildEnglishHelperRequest(prompts[action]);
+  }
+
+  function buildOrganizeLyricsRequest(rawLyrics) {
+    const value = String(rawLyrics || '').trim();
+    if (!value) throw new Error('请先粘贴歌词');
+    return buildAiRequest('organize_lyrics', { rawLyrics: value });
+  }
+
+  function buildExplainLyricRequest(english, originalChinese = '') {
+    const value = String(english || '').trim();
+    if (!value) throw new Error('歌词不能为空');
+    return buildAiRequest('explain_lyric', { english: value, originalChinese: String(originalChinese || '').trim() });
   }
 
   function buildArticleTranslationRequest(title, paragraphs) {
@@ -454,6 +462,7 @@
     sentencePracticeSelection, selectArticleFocusWords, isTechnicalTarget,
     knownWordSample, buildAiContext, buildAiRequest, buildArticleTranslationRequest, lookupCacheKey,
     buildLookupWordRequest, buildEnglishHelperRequest, buildEnglishHelperShortcutRequest,
+    buildOrganizeLyricsRequest, buildExplainLyricRequest,
     compactLookupMeaning, wordDraftFromLookup, mergeMeanings,
     AI_PROVIDER_KEY, AI_PROVIDERS, DEFAULT_AI_PROVIDER,
     normalizeAiProvider, loadAiProvider, saveAiProvider, withAiProvider,

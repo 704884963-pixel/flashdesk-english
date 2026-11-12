@@ -5,6 +5,8 @@
 ((global) => {
   const FORMAT = 'flashdesk-backup';
   const VERSION = 1;
+  const songLearning = global.FlashSongLearning
+    || (typeof module !== 'undefined' && module.exports ? require('./song-learning.js') : null);
   const clone = (value) => JSON.parse(JSON.stringify(value));
 
   const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -73,9 +75,19 @@
       if ('sourceUrl' in article) normalized.sourceUrl = normalizedExternalUrl(article.sourceUrl);
       return normalized;
     });
+    const songs = (Array.isArray(value.songs) ? value.songs : []).map((song) => {
+      if (!songLearning?.normalizeSong) throw new Error('歌曲校验模块不可用');
+      return songLearning.normalizeSong(song);
+    });
+    const songIds = new Set();
+    for (const song of songs) {
+      if (songIds.has(song.id)) throw new Error(`存在重复歌曲 ID：${song.id}`);
+      songIds.add(song.id);
+    }
     return {
       articles,
       unknownWords: [...new Set(value.unknownWords.map((word) => String(word || '').trim().toLowerCase()).filter(Boolean))],
+      songs,
     };
   }
 
@@ -154,6 +166,7 @@
       words,
       cards: value.learning.cards.length,
       articles: value.articles.articles.length,
+      songs: value.articles.songs.length,
       history: value.learning.history.length,
       due,
       exportedAt: value.exportedAt,

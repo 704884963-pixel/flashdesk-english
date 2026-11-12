@@ -1226,7 +1226,8 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 .usage-all-time span { color: var(--muted); font-size: .78rem; }
 .usage-all-time strong { min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-variant-numeric: tabular-nums; }
 .ai-helper-panel { display: grid; gap: 12px; }
-.ai-helper-quick { display: flex; flex-wrap: wrap; gap: 7px; }
+.ai-helper-quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.ai-helper-quick .btn { width: 100%; min-width: 0; }
 .ai-helper-answer { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); line-height: 1.7; overflow-wrap: anywhere; }
 .ai-helper-answer p { margin: 0 0 8px; }
 .ai-helper-answer p:last-child { margin-bottom: 0; }
@@ -1247,6 +1248,32 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
 .ai-word-candidates { display: grid; gap: 8px; }
 .ai-word-candidates .btn { width: 100%; min-width: 0; justify-content: flex-start; text-align: left; white-space: normal; }
 
+/* ---- song learning: user-owned lyrics, separate from Review cards ---- */
+.song-page { width: min(100%, 820px); margin: 0 auto; }
+.song-page .ai-head { align-items: center; }
+.song-library { display: grid; gap: 9px; }
+.song-library-card { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.song-library-open { min-width: 0; flex: 1; display: grid; gap: 3px; text-align: left; }
+.song-library-open strong { overflow-wrap: anywhere; font-size: 1.05rem; }
+.song-library-open span, .song-library-open small { color: var(--muted); }
+.song-import-panel, .song-preview { display: grid; gap: 14px; }
+.song-import-panel textarea { width: 100%; min-height: 260px; resize: vertical; }
+.song-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+#song-preview-lines, .song-lines { display: grid; gap: 10px; }
+.song-preview-line { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.song-line-number { align-self: start; padding-top: 23px; color: var(--accent); font-family: var(--mono); }
+.song-warnings { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); border-radius: 10px; }
+.song-line-card { display: grid; gap: 10px; min-width: 0; }
+.song-line-head { display: flex; justify-content: space-between; gap: 8px; }
+.song-learned { color: var(--good); font-size: .78rem; }
+.song-english { margin: 0; overflow-wrap: anywhere; font-family: var(--display); font-size: 1.16rem; line-height: 1.55; }
+.song-original-translation, .song-ai-explanation { padding: 10px 12px; border-radius: 10px; background: var(--panel-2); }
+.song-original-translation p, .song-ai-explanation p { margin: 4px 0 0; }
+.song-ai-explanation { display: grid; gap: 6px; border-left: 2px solid var(--accent); }
+.song-line-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.song-word-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.song-word-form input { min-width: 0; }
+
 /* ---- responsive / motion ---- */
 
 @media (max-width: 560px) {
@@ -1261,6 +1288,15 @@ td.num { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
   .ai-helper-lookup { width: 100%; min-width: 0; padding: 12px; }
   .ai-helper-lookup .form-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-helper-lookup .form-actions .btn { width: 100%; min-width: 0; }
+  .song-page .ai-head { align-items: stretch; }
+  .song-page .ai-head > .btn { width: 100%; }
+  .song-library-card { align-items: stretch; }
+  .song-preview-line { grid-template-columns: auto minmax(0, 1fr); }
+  .song-preview-line .field, .song-preview-line .btn { grid-column: 2; }
+  .song-line-number { grid-row: 1 / span 3; }
+  .song-meta-grid { grid-template-columns: 1fr; }
+  .song-line-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .song-line-actions .btn { width: 100%; min-width: 0; }
   .app { padding: 10px 14px 48px; }
   .header { padding: 5px 0 4px; }
   .wordmark h1 { font-size: 1.55rem; }

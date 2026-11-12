@@ -56,6 +56,7 @@ async function nodeHarness(t) {
       if (name === './seed.js') return require('../seed.js');
       if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
+      if (name === './public/song-learning.js') return require('../public/song-learning.js');
       if (name === 'node:http') {
         return {
           createServer(handler) {

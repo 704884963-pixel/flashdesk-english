@@ -11,6 +11,7 @@ const ASSETS = [
   'audio-cache.js',
   'batch-import.js',
   'article-utils.js',
+  'song-learning.js',
   'article-store.js',
   'reading-progress.js',
   'pwa-update.js',

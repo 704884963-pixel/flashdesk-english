@@ -40,6 +40,7 @@ async function harness(t, mode, initial = { cards: [], history: [] }) {
       if (name === './seed.js') return [];
       if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
+      if (name === './public/song-learning.js') return require('../public/song-learning.js');
       if (name === 'node:os') return { homedir: () => dir };
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
         if (fail) throw new Error('write failed');

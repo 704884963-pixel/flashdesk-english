@@ -30,6 +30,8 @@ const lookupData = {
   memoryReading: 'e + val + u + A + tion', chineseReading: '伊-瓦柳-诶-申（仅近似）',
   forms: ['evaluations'],
 };
+const organizedLyricsData = { title: 'The Nights', artist: 'Avicii', lines: [{ english: 'Once upon a younger year', originalChinese: '在我还年轻的时候' }], ignored: ['评论 999+'], warnings: [] };
+const lyricExplanationData = { naturalChinese: '继续向前。', keyExpressions: ['move on'], structure: '祈使句' };
 const upstream = (content, status = 200, usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 }) => async () => new Response(JSON.stringify(status === 200 ? { choices: [{ message: { content, reasoning_content: 'private reasoning' } }], usage } : { secret: 'do not expose' }), { status, headers: { 'Content-Type': 'application/json' } });
 const geminiUpstream = (content, status = 200, usage = { promptTokenCount: 13, candidatesTokenCount: 9, totalTokenCount: 22 }) => async () => new Response(JSON.stringify(status === 200 ? { candidates: [{ content: { parts: [{ text: content }] }, finishReason: 'STOP' }], usageMetadata: usage } : { error: { message: 'private upstream error' } }), { status, headers: { 'Content-Type': 'application/json' } });
 const request = (task, body = {}, provider) => new Request('https://worker.example/ai', { method: 'POST', headers: { Authorization: 'Bearer app-test', 'Content-Type': 'application/json', Origin: 'https://704884963-pixel.github.io' }, body: JSON.stringify({ task, context: { targetWords: [], ...body }, options: {}, ...(provider === undefined ? {} : { provider }) }) });
@@ -91,6 +93,29 @@ test('lookup_word rejects a missing word and permits an empty optional sentence 
 test('lookup_word requires two to four structured common senses', async () => { const { validateAiData } = await load('validation.js'); assert.throws(() => validateAiData('lookup_word', { ...lookupData, senses: [lookupData.senses[0]] })); assert.throws(() => validateAiData('lookup_word', { ...lookupData, senses: Array.from({ length: 5 }, () => lookupData.senses[0]) })); assert.equal(validateAiData('lookup_word', lookupData).senses.length, 2); });
 test('english_helper accepts one trimmed query and discards options', async () => { const { validateClientRequest } = await load('validation.js'); assert.deepEqual(validateClientRequest({ task: 'english_helper', context: { query: ' explain client ', history: ['secret'] }, options: { count: 9 } }), { task: 'english_helper', context: { query: 'explain client' }, options: {}, provider: 'zhipu' }); });
 test('english_helper response is one plain answer string', async () => { const { validateAiData } = await load('validation.js'); assert.deepEqual(validateAiData('english_helper', { answer: ' 客户通常指购买服务的人。 ' }), { answer: '客户通常指购买服务的人。' }); });
+test('organize_lyrics validates a strict editable preview without rewriting fields', async () => {
+  const { validateAiData, validateClientRequest } = await load('validation.js');
+  assert.deepEqual(validateAiData('organize_lyrics', organizedLyricsData), organizedLyricsData);
+  assert.deepEqual(validateClientRequest({ task: 'organize_lyrics', context: { rawLyrics: '  pasted lyrics  ' }, options: {} }).context, { rawLyrics: 'pasted lyrics' });
+});
+test('explain_lyric validates concise structured learning help', async () => {
+  const { validateAiData, validateClientRequest } = await load('validation.js');
+  assert.deepEqual(validateAiData('explain_lyric', lyricExplanationData), lyricExplanationData);
+  assert.deepEqual(validateClientRequest({ task: 'explain_lyric', context: { english: ' Move on. ', originalChinese: ' 继续。 ' }, options: {} }).context, { english: 'Move on.', originalChinese: '继续。' });
+});
+test('lyrics prompt only organizes supplied text and forbids retrieval or rewriting', async () => {
+  const { organizeLyricsMessages } = await load('prompts/organize-lyrics.js');
+  const prompt = organizeLyricsMessages({ rawLyrics: 'User supplied line' })[0].content;
+  assert.match(prompt, /Never search for, recall, or complete missing lyrics/);
+  assert.match(prompt, /Preserve every English lyric line exactly as supplied/);
+  assert.match(prompt, /strict JSON/);
+});
+test('organized lyrics return through the existing provider-neutral Worker route', async () => {
+  const { handleRequest } = await load('index.js');
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: 'Once upon a younger year' }), env, upstream(JSON.stringify(organizedLyricsData)));
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, organizedLyricsData);
+});
 test('Article translation request keeps only title and the paragraph array', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'translate_article', context: { title: ' Title ', paragraphs: [' First. ', ' Second. '], cards: ['private'], history: ['private'] }, options: { count: 99 } }); assert.deepEqual(result, { task: 'translate_article', context: { title: 'Title', paragraphs: ['First.', 'Second.'] }, options: {}, provider: 'zhipu' }); });
 test('unknown task is rejected', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(request('chat'), env, upstream('{}')); assert.equal(response.status, 400); });
 test('Worker rejects missing auth', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(new Request('https://worker.example/health'), env, upstream('{}')); assert.equal(response.status, 401); });
@@ -441,8 +466,8 @@ test('pronunciation correction usage is included in aggregate attempts', async (
 });
 test('all text tasks have centralized output token and total attempt budgets', async () => {
   const { TASK_OUTPUT_TOKEN_LIMITS, TASK_ATTEMPT_LIMITS, generationOptions } = await load('index.js');
-  assert.deepEqual(TASK_OUTPUT_TOKEN_LIMITS, { generate_sentences: 800, generate_article: 2400, translate_article: 2000, lookup_word: 480, english_helper: 520 });
-  assert.deepEqual(TASK_ATTEMPT_LIMITS, { generate_sentences: 3, generate_article: 2, translate_article: 2, lookup_word: 3, english_helper: 2 });
+  assert.deepEqual(TASK_OUTPUT_TOKEN_LIMITS, { generate_sentences: 800, generate_article: 2400, translate_article: 2000, lookup_word: 480, english_helper: 520, organize_lyrics: 2400, explain_lyric: 700 });
+  assert.deepEqual(TASK_ATTEMPT_LIMITS, { generate_sentences: 3, generate_article: 2, translate_article: 2, lookup_word: 3, english_helper: 2, organize_lyrics: 2, explain_lyric: 2 });
   for (const [task, limit] of Object.entries(TASK_OUTPUT_TOKEN_LIMITS)) assert.equal(generationOptions(task, env).maxOutputTokens, limit);
 });
 test('Zhipu and Gemini map the shared Article output limit to provider-specific fields', async () => {

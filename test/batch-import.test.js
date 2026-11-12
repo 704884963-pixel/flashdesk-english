@@ -221,6 +221,7 @@ async function storeHarness(t, mode, initial = baseData()) {
       if (name === './seed.js') return [];
       if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return FlashLogic;
+      if (name === './public/song-learning.js') return require('../public/song-learning.js');
       if (name === 'node:fs') return { ...fs, renameSync(...args) {
         if (fail) throw new Error('write failed');
         return fs.renameSync(...args);

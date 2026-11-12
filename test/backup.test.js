@@ -10,9 +10,10 @@ const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8
 
 const card = { id: 'c1', deck: 'Words', wordNumber: 1, front: 'word', back: '词', memoryReading: 'w + ord', chineseReading: '沃德', forms: ['words'], due: 10, streak: 2, reviewStep: 1, lapses: 1, created: 1 };
 const article = { id: 'a1', title: 'Title', content: 'English.', paragraphTranslations: ['中文。'], source: '', sourceUrl: '', publishedAt: '', progressSentenceIndex: 1, progressPercent: 50, createdAt: 1, updatedAt: 2, lastReadAt: 2 };
+const song = { id: 'song1', title: 'Song', artist: 'Singer', createdAt: 1, updatedAt: 2, lastStudiedAt: 2, lines: [{ id: 'line1', english: 'Keep moving on.', originalChinese: '继续前进。', aiExplanation: null, learned: false }] };
 const source = {
   learning: { cards: [card], history: [{ date: '2026-09-30', reviewed: 1 }], meta: { nextWordNumber: 2 } },
-  articles: { articles: [article], unknownWords: [' WORD '] },
+  articles: { articles: [article], unknownWords: [' WORD '], songs: [song] },
   aiLearning: { generations: [{ type: 'sentences', targetWords: ['word'], primary: 'word', createdAt: '2026-09-30T00:00:00.000Z' }] },
   usageStats: { version: 1, days: { '2026-09-30': { activeSeconds: 360, sessionCount: 2, areas: { review: 300, words: 60, aiLearning: 0, reading: 0, other: 0 } } } },
 };
@@ -54,6 +55,15 @@ test('full backup preserves Articles, translations, progress and unknownWords', 
   const result = Backup.create(source);
   assert.deepEqual(result.articles.articles[0], article);
   assert.deepEqual(result.articles.unknownWords, ['word']);
+});
+test('full backup preserves the formal song library without changing version', () => {
+  const result = Backup.create(source);
+  assert.equal(result.version, 1);
+  assert.deepEqual(result.articles.songs, [song]);
+});
+test('legacy version 1 backup without songs restores as an empty song library', () => {
+  const legacy = Backup.create(source); delete legacy.articles.songs;
+  assert.deepEqual(Backup.validate(legacy).articles.songs, []);
 });
 test('full backup preserves only persistent AI generation history', () => {
   const result = Backup.create(source);
@@ -130,6 +140,9 @@ test('invalid backups are rejected before any persistent-domain call', async () 
   const dangerousUrl = Backup.create(source);
   dangerousUrl.articles.articles[0].sourceUrl = 'javascript:alert(1)';
   invalidBackups.push(dangerousUrl);
+  const invalidSong = Backup.create(source);
+  invalidSong.articles.songs[0].lines[0].english = '';
+  invalidBackups.push(invalidSong);
 
   for (const invalid of invalidBackups) {
     const harness = invalidRestoreHarness(invalid);
@@ -137,9 +150,9 @@ test('invalid backups are rejected before any persistent-domain call', async () 
     assert.deepEqual(harness.calls, { collect: 0, learning: 0, articles: 0, ai: 0, usage: 0 });
   }
 });
-test('backup summary counts Words, Articles, history and due cards', () => {
+test('backup summary counts Words, Articles, songs, history and due cards', () => {
   const backup = Backup.create(source);
-  assert.deepEqual(Backup.summary(backup, 10), { words: 1, cards: 1, articles: 1, history: 1, due: 1, exportedAt: backup.exportedAt });
+  assert.deepEqual(Backup.summary(backup, 10), { words: 1, cards: 1, articles: 1, songs: 1, history: 1, due: 1, exportedAt: backup.exportedAt });
 });
 test('backup schema cannot contain settings or secrets from unrelated storage', () => {
   const text = JSON.stringify(Backup.create(source));

@@ -581,10 +581,10 @@ test('context meaning merge splits Chinese and English punctuation and removes d
 test('English helper builds one independent provider-neutral query', () => assert.deepEqual(Ai.buildEnglishHelperRequest(' customer 和 client？ '), { task: 'english_helper', context: { query: 'customer 和 client？' }, options: {} }));
 test('English helper rejects an empty query', () => assert.throws(() => Ai.buildEnglishHelperRequest('  '), /不能为空/));
 test('English helper lookup shortcut immediately builds lookup_word without sentence context', () => assert.deepEqual(Ai.buildEnglishHelperShortcutRequest('lookup', ' maintain '), { task: 'lookup_word', context: { word: 'maintain', sentence: '' }, options: {} }));
-test('other English helper shortcuts immediately build their final helper queries', () => {
-  assert.equal(Ai.buildEnglishHelperShortcutRequest('synonyms', 'maintain').context.query, '请给出 maintain 的常见近义词和区别');
-  assert.equal(Ai.buildEnglishHelperShortcutRequest('difference', 'customer 和 client').context.query, '请比较 customer 和 client 的词义区别');
+test('the remaining example shortcut immediately builds its final helper query', () => {
   assert.equal(Ai.buildEnglishHelperShortcutRequest('example', 'maintain').context.query, '请给 maintain 一个适合 CET-4 以下水平的简单例句');
+  assert.throws(() => Ai.buildEnglishHelperShortcutRequest('synonyms', 'maintain'), /unknown helper action/);
+  assert.throws(() => Ai.buildEnglishHelperShortcutRequest('difference', 'maintain'), /unknown helper action/);
 });
 test('English helper shortcuts reject empty input before any AI request', () => assert.throws(() => Ai.buildEnglishHelperShortcutRequest('lookup', ' '), /不能为空/));
 test('AI Sentence rendering reuses the Article word tokenizer', () => assert.match(appSource, /function interactiveWordHtml[\s\S]*?FlashArticleUtils\.wordTokens/));
@@ -629,8 +629,9 @@ test('English helper appears inside AI Learning rather than primary navigation',
 });
 test('English helper UI has four immediate quick actions and safe escaped answer rendering', () => {
   const section = appSource.slice(appSource.indexOf('function helperAnswerHtml'), appSource.indexOf('function renderAiSentences'));
-  for (const label of ['查单词', '近义词', '词义区别', '简单例句']) assert.match(section, new RegExp(label));
-  for (const action of ['lookup', 'synonyms', 'difference', 'example']) assert.match(section, new RegExp(`data-ai-helper-action="${action}"`));
+  for (const label of ['查单词', '简单例句', '歌曲学习', '问 AI']) assert.match(section, new RegExp(label));
+  for (const action of ['lookup', 'example']) assert.match(section, new RegExp(`data-ai-helper-action="${action}"`));
+  assert.doesNotMatch(section, /近义词|词义区别/);
   assert.doesNotMatch(section, /data-ai-helper-template/);
   assert.match(section, /esc\(line\)/); assert.doesNotMatch(section, /innerHTML\s*=\s*state\.ai\.helperAnswer/);
 });
@@ -646,7 +647,7 @@ test('structured helper lookup renders core meaning, up to four senses, context 
   assert.match(section, /result\.coreMeaningZh \|\| result\.meaningZh/);
   assert.match(section, /result\.senses\.slice\(0, 4\)/);
   for (const field of ['meaningInContextZh', 'memoryReading', 'chineseReading']) assert.match(section, new RegExp(`result\.${field}`));
-  assert.match(section, /data-ai-pronounce/); assert.match(section, /data-ai-helper-add-word/);
+  assert.match(section, /data-ai-speak/); assert.doesNotMatch(section, /data-ai-pronounce/); assert.match(section, /data-ai-helper-add-word/);
 });
 test('helper lookup uses canonical front/forms/baseForm duplicate matching and hides add for existing cards', () => {
   const section = appSource.slice(appSource.indexOf('function helperLookupHtml'), appSource.indexOf('function renderAiHelper'));
@@ -748,7 +749,7 @@ test('English helper submits through the shared AI endpoint and Bearer authoriza
   assert.match(appSource, /Authorization: `Bearer \$\{aiSettings\.token\}`/);
 });
 test('English helper does not send history or write learning data', () => {
-  const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function renderAiSentences'));
+  const section = appSource.slice(appSource.indexOf('async function askEnglishHelper'), appSource.indexOf('function songDate'));
   assert.match(section, /buildEnglishHelperRequest\(query\)/);
   assert.doesNotMatch(section, /aiHistory|FlashStore|ArticleStore|rememberAiGeneration|localStorage/);
 });

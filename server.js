@@ -8,6 +8,7 @@ const path = require('node:path');
 const os = require('node:os');
 const seed = require('./seed.js');
 const FlashLogic = require('./public/logic.js');
+const FlashSongLearning = require('./public/song-learning.js');
 const { resolveHost } = require('./server-config.js');
 
 const PORT = 5902;
@@ -143,10 +144,15 @@ function loadData() {
 }
 
 function loadArticles() {
-  if (!fs.existsSync(ARTICLE_FILE)) return { articles: [], unknownWords: [], drafts: [] };
+  if (!fs.existsSync(ARTICLE_FILE)) return { articles: [], unknownWords: [], drafts: [], songs: [] };
   const parsed = JSON.parse(fs.readFileSync(ARTICLE_FILE, 'utf8'));
   if (!parsed || !Array.isArray(parsed.articles)) throw new Error('article data file is invalid');
-  return { ...parsed, unknownWords: normalizeUnknownWords(parsed.unknownWords), drafts: Array.isArray(parsed.drafts) ? parsed.drafts : [] };
+  return {
+    ...parsed,
+    unknownWords: normalizeUnknownWords(parsed.unknownWords),
+    drafts: Array.isArray(parsed.drafts) ? parsed.drafts : [],
+    songs: (Array.isArray(parsed.songs) ? parsed.songs : []).map(FlashSongLearning.normalizeSong),
+  };
 }
 
 function normalizeUnknownWords(words) {
@@ -182,7 +188,11 @@ function validateArticleSnapshot(snapshot) {
       || typeof article.content !== 'string' || !article.content.trim())) {
     throw new Error('article data is invalid');
   }
-  return { articles: cloneData(snapshot.articles), unknownWords: normalizeUnknownWords(snapshot.unknownWords) };
+  return {
+    articles: cloneData(snapshot.articles),
+    unknownWords: normalizeUnknownWords(snapshot.unknownWords),
+    songs: (Array.isArray(snapshot.songs) ? snapshot.songs : []).map(FlashSongLearning.normalizeSong),
+  };
 }
 
 function makeArticleId() {
@@ -322,7 +332,7 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === 'GET' && pathname === '/api/articles/backup') {
     const articleData = loadArticles();
-    return sendJSON(res, 200, { articles: articleData.articles, unknownWords: articleData.unknownWords });
+    return sendJSON(res, 200, { articles: articleData.articles, unknownWords: articleData.unknownWords, songs: articleData.songs });
   }
 
   if (req.method === 'PUT' && pathname === '/api/articles/backup') {
@@ -337,6 +347,56 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === 'GET' && pathname === '/api/articles') {
     return sendJSON(res, 200, { articles: loadArticles().articles });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/articles/songs') {
+    return sendJSON(res, 200, { songs: loadArticles().songs });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/articles/songs') {
+    const body = await readBody(req);
+    let song;
+    try { song = FlashSongLearning.createSong(body); }
+    catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    const articleData = loadArticles();
+    articleData.songs.push(song);
+    saveArticles(articleData);
+    return sendJSON(res, 201, { song });
+  }
+
+  const songItem = pathname.match(/^\/api\/articles\/songs\/([^/]+)$/);
+  if (req.method === 'GET' && songItem) {
+    const song = loadArticles().songs.find((item) => item.id === songItem[1]);
+    if (!song) return sendJSON(res, 404, { error: 'song not found' });
+    return sendJSON(res, 200, { song });
+  }
+
+  if (req.method === 'PUT' && songItem) {
+    const body = await readBody(req);
+    const articleData = loadArticles();
+    const index = articleData.songs.findIndex((item) => item.id === songItem[1]);
+    if (index === -1) return sendJSON(res, 404, { error: 'song not found' });
+    const current = articleData.songs[index];
+    let song;
+    try {
+      const now = Date.now();
+      song = FlashSongLearning.normalizeSong({
+        ...current, ...body, id: current.id, createdAt: current.createdAt,
+        updatedAt: now, lastStudiedAt: body?.lastStudiedAt === null ? null : (Number(body?.lastStudiedAt) || now),
+      });
+    } catch (err) { return sendJSON(res, 400, { error: err.message }); }
+    articleData.songs[index] = song;
+    saveArticles(articleData);
+    return sendJSON(res, 200, { song });
+  }
+
+  if (req.method === 'DELETE' && songItem) {
+    const articleData = loadArticles();
+    const index = articleData.songs.findIndex((item) => item.id === songItem[1]);
+    if (index === -1) return sendJSON(res, 404, { error: 'song not found' });
+    articleData.songs.splice(index, 1);
+    saveArticles(articleData);
+    return sendJSON(res, 200, { ok: true });
   }
 
   if (req.method === 'GET' && pathname === '/api/articles/drafts') {

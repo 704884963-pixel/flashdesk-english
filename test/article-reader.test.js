@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const { once } = require('node:events');
 
 const Utils = require('../public/article-utils.js');
+const SongLearning = require('../public/song-learning.js');
 const { createArticleStore } = require('../pwa/article-store-idb.js');
 const source = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const appSource = source('public/app.js');
@@ -330,6 +331,27 @@ test('PWA ArticleStore deletes only the requested Article', async () => {
   await store.delete(first.id);
   assert.deepEqual((await store.list()).map((a) => a.title), ['Second']);
 });
+test('PWA song library persists formal songs across ArticleStore instances', async () => {
+  const idb = fakeIndexedDb();
+  const first = createArticleStore(idb, Utils);
+  const song = await first.createSong({ title: 'The Nights', artist: 'Avicii', lines: [{ english: 'Once upon a younger year', originalChinese: '在我还年轻的时候' }] });
+  const second = createArticleStore(idb, Utils);
+  assert.equal((await second.listSongs())[0].id, song.id);
+  assert.equal((await second.getSong(song.id)).lines[0].originalChinese, '在我还年轻的时候');
+});
+test('song explanations and original translations persist independently', async () => {
+  const store = createArticleStore(fakeIndexedDb(), Utils);
+  const song = await store.createSong({ title: 'Song', lines: [{ english: 'Keep moving on.', originalChinese: '继续前进。' }] });
+  const updated = await store.updateSong(song.id, { lines: [{ ...song.lines[0], aiExplanation: { naturalChinese: '坚持向前。', keyExpressions: ['move on'], structure: '祈使句' } }] });
+  assert.equal(updated.lines[0].originalChinese, '继续前进。');
+  assert.equal(updated.lines[0].aiExplanation.naturalChinese, '坚持向前。');
+});
+test('creating a song never creates an Article or Review card', async () => {
+  const store = createArticleStore(fakeIndexedDb(), Utils);
+  await store.createSong({ title: 'Song', lines: [{ english: 'A line.' }] });
+  assert.equal((await store.list()).length, 0);
+  assert.equal(SongLearning.learnedCount((await store.listSongs())[0]), 0);
+});
 test('PWA Article save failure leaves no partial Article', async () => {
   const idb = fakeIndexedDb();
   const store = createArticleStore(idb, Utils);
@@ -345,6 +367,7 @@ test('PWA Article backup snapshot replaces Articles and unknownWords atomically'
   await store.replaceSnapshot(replacement);
   assert.deepEqual((await store.exportSnapshot()).articles.map((item) => item.id), ['restored']);
   assert.deepEqual(await store.getUnknownWords(), ['new']);
+  assert.deepEqual(await store.listSongs(), []);
 });
 test('PWA AI drafts persist independently and survive a new ArticleStore instance', async () => {
   const idb = fakeIndexedDb();
@@ -363,10 +386,10 @@ test('deleting an AI draft never deletes a formal Reading Article', async () => 
   assert.equal((await store.listAiDrafts()).length, 0);
   assert.equal((await store.get(article.id)).id, article.id);
 });
-test('ArticleStore backup remains unchanged and excludes local AI drafts', async () => {
+test('ArticleStore backup includes formal songs but excludes local AI drafts', async () => {
   const store = createArticleStore(fakeIndexedDb(), Utils);
   await store.saveAiDraft({ type: 'sentences', data: { sentences: [{ english: 'A sentence.' }] } });
-  assert.deepEqual(Object.keys(await store.exportSnapshot()).sort(), ['articles', 'unknownWords']);
+  assert.deepEqual(Object.keys(await store.exportSnapshot()).sort(), ['articles', 'songs', 'unknownWords']);
 });
 
 async function nodeArticleHarness(t) {
@@ -385,6 +408,7 @@ async function nodeArticleHarness(t) {
       if (name === './seed.js') return [];
       if (name === './server-config.js') return require('../server-config.js');
       if (name === './public/logic.js') return require('../public/logic.js');
+      if (name === './public/song-learning.js') return require('../public/song-learning.js');
       if (name === './public/article-utils.js') return Utils;
       if (name === 'node:fs') return { ...fs, renameSync(from, to) {
         if (failArticleWrite && String(to).endsWith('flashdesk-articles.json')) throw new Error('article write failed');
@@ -417,6 +441,14 @@ test('Node ArticleStore creates its independent file and model', async (t) => {
   const article = await h.store.create(sample);
   assert.equal(article.source, 'Reuters');
   assert.equal(JSON.parse(fs.readFileSync(h.articleFile)).articles.length, 1);
+});
+test('Node song library persists independently without creating learning cards', async (t) => {
+  const h = await nodeArticleHarness(t);
+  const before = fs.readFileSync(h.cardFile, 'utf8');
+  const song = await h.store.createSong({ title: 'The Nights', artist: 'Avicii', lines: [{ english: 'Once upon a younger year', originalChinese: '在我还年轻的时候' }] });
+  assert.equal((await h.store.listSongs()).length, 1);
+  assert.equal((await h.store.getSong(song.id)).title, 'The Nights');
+  assert.equal(fs.readFileSync(h.cardFile, 'utf8'), before);
 });
 test('Node AI drafts persist independently, reopen without a provider, and delete without touching Reading', async (t) => {
   const h = await nodeArticleHarness(t);

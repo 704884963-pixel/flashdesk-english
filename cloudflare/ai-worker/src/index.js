@@ -4,6 +4,8 @@ import { articleMessages } from './prompts/article.js';
 import { lookupWordMessages } from './prompts/lookup-word.js';
 import { translateArticleMessages } from './prompts/translate-article.js';
 import { englishHelperMessages } from './prompts/english-helper.js';
+import { organizeLyricsMessages } from './prompts/organize-lyrics.js';
+import { explainLyricMessages } from './prompts/explain-lyric.js';
 import { englishWordCount, parseAiOutput, validateClientRequest } from './validation.js';
 import { createPronunciationProvider, validatePronunciationRequest } from './pronunciation.js';
 
@@ -14,6 +16,8 @@ export const TASK_OUTPUT_TOKEN_LIMITS = Object.freeze({
   translate_article: 2000,
   lookup_word: 480,
   english_helper: 520,
+  organize_lyrics: 2400,
+  explain_lyric: 700,
 });
 export const TASK_ATTEMPT_LIMITS = Object.freeze({
   generate_sentences: 3,
@@ -21,6 +25,8 @@ export const TASK_ATTEMPT_LIMITS = Object.freeze({
   translate_article: 2,
   lookup_word: 3,
   english_helper: 2,
+  organize_lyrics: 2,
+  explain_lyric: 2,
 });
 const allowedOrigins = (env) => new Set(['https://704884963-pixel.github.io', 'http://localhost:5902', 'http://127.0.0.1:5902', 'http://[::1]:5902', ...String(env.FLASHDESK_ALLOWED_ORIGIN || '').split(',').map((v) => v.trim()).filter(Boolean)]);
 const cors = (origin, env) => {
@@ -40,16 +46,16 @@ export function generationOptions(task, env, providerName = 'zhipu') {
     return {
       model: providerModel('gemini', env),
       maxOutputTokens,
-      ...(task === 'lookup_word' || task === 'english_helper' ? {
+      ...(task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric' ? {
         temperature: 0.1,
         reasoning: false,
       } : {}),
-      timeoutMs: task === 'lookup_word' || task === 'english_helper'
+      timeoutMs: task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric'
         ? 15000
         : task === 'generate_sentences' ? 45000 : 60000,
     };
   }
-  if (task === 'lookup_word' || task === 'english_helper') {
+  if (task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
       maxOutputTokens,
@@ -139,7 +145,9 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
     ? sentenceMessages(input.context)
     : input.task === 'generate_article' ? articleMessages(input.context)
       : input.task === 'translate_article' ? translateArticleMessages(input.context)
-        : input.task === 'english_helper' ? englishHelperMessages(input.context) : lookupWordMessages(input.context);
+        : input.task === 'english_helper' ? englishHelperMessages(input.context)
+          : input.task === 'organize_lyrics' ? organizeLyricsMessages(input.context)
+            : input.task === 'explain_lyric' ? explainLyricMessages(input.context) : lookupWordMessages(input.context);
   let provider;
   try { provider = createProvider(input.provider, env, fetchImpl); } catch { return failure('UPSTREAM_ERROR', 'AI 服务配置错误', 503, origin, env, { attemptCount: 0 }); }
   const generation = optionsFactory(input.task, env, input.provider);

@@ -3,11 +3,14 @@
 
 ((global) => {
   const DB_NAME = 'flashdesk-content';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const STORE = 'articles';
   const PROFILE_STORE = 'readingProfile';
   const PROFILE_ID = 'default';
   const DRAFT_STORE = 'aiDrafts';
+  const SONG_STORE = 'songs';
+  const songLearning = global.FlashSongLearning
+    || (typeof module !== 'undefined' && module.exports ? require('../public/song-learning.js') : null);
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const makeId = () => `a_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 
@@ -25,6 +28,7 @@
           if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
           if (!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
           if (!db.objectStoreNames.contains(DRAFT_STORE)) db.createObjectStore(DRAFT_STORE, { keyPath: 'id' });
+          if (!db.objectStoreNames.contains(SONG_STORE)) db.createObjectStore(SONG_STORE, { keyPath: 'id' });
         };
         request.onblocked = () => reject(new Error('文章数据库正在被其他页面使用，请关闭旧页面后重试'));
         request.onsuccess = () => {
@@ -124,20 +128,69 @@
       return clone(unknownWords);
     }
 
+    async function listSongs() {
+      const db = await open();
+      const transaction = db.transaction(SONG_STORE, 'readonly');
+      return clone(await requestResult(transaction.objectStore(SONG_STORE).getAll()));
+    }
+
+    async function getSong(id) {
+      const db = await open();
+      const transaction = db.transaction(SONG_STORE, 'readonly');
+      const song = await requestResult(transaction.objectStore(SONG_STORE).get(String(id)));
+      if (!song) throw new Error('song not found');
+      return clone(song);
+    }
+
+    async function createSong(fields) {
+      const song = songLearning.createSong(fields);
+      const db = await open();
+      const transaction = db.transaction(SONG_STORE, 'readwrite');
+      transaction.objectStore(SONG_STORE).add(song);
+      await transactionDone(transaction);
+      return clone(song);
+    }
+
+    async function updateSong(id, fields) {
+      const current = await getSong(id);
+      const now = Date.now();
+      const song = songLearning.normalizeSong({
+        ...current, ...clone(fields), id: current.id, createdAt: current.createdAt,
+        updatedAt: now, lastStudiedAt: fields?.lastStudiedAt === null ? null : (Number(fields?.lastStudiedAt) || now),
+      });
+      const db = await open();
+      const transaction = db.transaction(SONG_STORE, 'readwrite');
+      transaction.objectStore(SONG_STORE).put(song);
+      await transactionDone(transaction);
+      return clone(song);
+    }
+
+    async function deleteSong(id) {
+      const db = await open();
+      const transaction = db.transaction(SONG_STORE, 'readwrite');
+      transaction.objectStore(SONG_STORE).delete(String(id));
+      await transactionDone(transaction);
+      return { ok: true };
+    }
+
     async function exportSnapshot() {
-      return { articles: await list(), unknownWords: await getUnknownWords() };
+      return { articles: await list(), unknownWords: await getUnknownWords(), songs: await listSongs() };
     }
 
     async function replaceSnapshot(snapshot) {
       if (!snapshot || !Array.isArray(snapshot.articles) || !Array.isArray(snapshot.unknownWords)) {
         throw new Error('阅读数据格式无效');
       }
+      const normalizedSongs = (Array.isArray(snapshot.songs) ? snapshot.songs : []).map(songLearning.normalizeSong);
       const db = await open();
-      const transaction = db.transaction([STORE, PROFILE_STORE], 'readwrite');
+      const transaction = db.transaction([STORE, PROFILE_STORE, SONG_STORE], 'readwrite');
       const articles = transaction.objectStore(STORE);
       const profile = transaction.objectStore(PROFILE_STORE);
+      const songs = transaction.objectStore(SONG_STORE);
       articles.clear();
+      songs.clear();
       snapshot.articles.forEach((article) => articles.put(clone(article)));
+      normalizedSongs.forEach((song) => songs.put(song));
       profile.put({ id: PROFILE_ID, unknownWords: utils.normalizeUnknownWords(snapshot.unknownWords) });
       await transactionDone(transaction);
       return exportSnapshot();
@@ -170,7 +223,11 @@
       return { ok: true };
     }
 
-    return { list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord, exportSnapshot, replaceSnapshot, listAiDrafts, saveAiDraft, deleteAiDraft };
+    return {
+      list, get, create, updateProgress, delete: remove, getUnknownWords, setUnknownWord,
+      exportSnapshot, replaceSnapshot, listAiDrafts, saveAiDraft, deleteAiDraft,
+      listSongs, getSong, createSong, updateSong, deleteSong,
+    };
   }
 
   global.createArticleStore = createArticleStore;

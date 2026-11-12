@@ -77,7 +77,10 @@ const state = {
     narrationId: 0, narrationRate: null, narrationSpeed: 1,
     narrationMode: null, narrationParagraphIndex: null, narrationSentenceIndex: null,
     helperQuery: '', helperAnswer: '', helperLookup: null, helperLoading: false, helperError: '',
+    helperRetry: null,
     drafts: [],
+    songs: [],
+    song: { mode: 'library', current: null, preview: null, rawLyrics: '', loading: false, error: '', explainingLineId: '' },
   },
   backup: { pending: null, restoring: false, restoreBlocked: false, recovery: null },
   updateAvailable: false,
@@ -1123,7 +1126,7 @@ function renderReview() {
   const arrowsOff = s.queue.length < 2 ? 'disabled' : '';
   const sentence = card.deck === 'Sentences';
   const frontHtml = sentence ? sentenceFrontHtml(card.front) : esc(card.front);
-  const normalLabel = sentence ? '🔊 整句' : '🔊 正常';
+  const normalLabel = sentence ? '🔊 标准发音' : '🔊 标准发音';
   const slowLabel = sentence ? '🐢 慢速整句' : '🐢 慢速';
   area.innerHTML = `
     <div class="review-stage">
@@ -1147,7 +1150,7 @@ function renderReview() {
           <button type="button" class="speak-front" id="speak-front-slow" data-speak-rate="0.75"
             title="美式英语慢速发音" aria-label="${slowLabel}">${slowLabel}</button>
           <button type="button" class="speak-front speak-ai" id="speak-front-ai" data-review-ai-pronounce
-            data-ai-pronunciation-label="AI发音" title="AI 发音" aria-label="AI发音">AI发音</button>
+            data-ai-pronunciation-label="更多声音" title="听其它声音" aria-label="更多声音">更多声音</button>
         </div>
       </div>
       <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
@@ -1595,7 +1598,7 @@ function wordSpeechButtons(card) {
   const id = esc(card.id);
   return `<div class="word-speech-actions">
     <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="1"
-      aria-label="正常朗读 ${esc(card.front)}">🔊 正常</button>
+      aria-label="标准发音 ${esc(card.front)}">🔊 标准发音</button>
     <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="0.75"
       aria-label="慢速朗读 ${esc(card.front)}">🐢 慢速</button>
   </div>`;
@@ -1617,8 +1620,8 @@ function wordListItemHtml(card, now = Date.now()) {
       </span>
     </button>
     <button type="button" class="word-ai-pronounce" data-word-ai-pronounce="${esc(card.id)}"
-      data-ai-pronunciation-label="AI发音" data-ai-pronunciation-loading-label="加载中…"
-      aria-label="AI发音 ${esc(card.front)}">AI发音</button>
+      data-ai-pronunciation-label="更多声音" data-ai-pronunciation-loading-label="加载中…"
+      aria-label="更多声音 ${esc(card.front)}">更多声音</button>
     ${wordSpeechButtons(card)}
   </article>`;
 }
@@ -2289,9 +2292,9 @@ function renderAiHome() {
   $('#ai-root').innerHTML = `<div class="ai-page">
     <header class="ai-head"><div><h2>AI 个性化学习</h2><p>AI 只生成候选内容，保存始终由你确认。</p></div></header>
     <div class="ai-home-actions">
+      <button type="button" class="panel ai-entry" data-ai-mode="helper"><strong>AI 英语助手</strong><span>查单词、简单例句、歌曲学习和自由提问</span></button>
       <button type="button" class="panel ai-entry" data-ai-mode="sentences"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></button>
       <button type="button" class="panel ai-entry" data-ai-mode="article"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></button>
-      <button type="button" class="panel ai-entry" data-ai-mode="helper"><strong>AI 英语助手</strong><span>查单词、近义词、词义区别和简单例句</span></button>
     </div>${draftHtml}${aiSettingsHtml()}</div>`;
 }
 
@@ -2343,7 +2346,7 @@ function helperLookupHtml(entry) {
     ${details('🧠 发音拆解', result.memoryReading)}
     ${details('🗣 中文近似', result.chineseReading)}
     ${existing}
-    <div class="form-actions"><button type="button" class="btn" data-ai-pronounce="${esc(clickedWord)}">AI发音</button>
+    <div class="form-actions"><button type="button" class="btn" data-ai-speak="${esc(clickedWord)}" data-rate="1">🔊 发音</button>
       ${card || ambiguous ? '' : `<button type="button" class="btn btn-primary" data-ai-helper-add-word="${esc(clickedWord)}">加入词库</button>`}
     </div>
   </article>`;
@@ -2356,12 +2359,12 @@ function renderAiHelper() {
       <label class="field"><span class="micro-label">你的问题</span><textarea id="ai-helper-query" rows="4" placeholder="例如：customer 和 client 有什么区别？">${esc(state.ai.helperQuery)}</textarea></label>
       <div class="ai-helper-quick" aria-label="快捷问题">
         <button type="button" class="btn" data-ai-helper-action="lookup" ${state.ai.helperLoading ? 'disabled' : ''}>查单词</button>
-        <button type="button" class="btn" data-ai-helper-action="synonyms" ${state.ai.helperLoading ? 'disabled' : ''}>近义词</button>
-        <button type="button" class="btn" data-ai-helper-action="difference" ${state.ai.helperLoading ? 'disabled' : ''}>词义区别</button>
         <button type="button" class="btn" data-ai-helper-action="example" ${state.ai.helperLoading ? 'disabled' : ''}>简单例句</button>
+        <button type="button" class="btn" data-ai-song-home ${state.ai.helperLoading ? 'disabled' : ''}>歌曲学习</button>
+        <button type="button" class="btn btn-primary" data-ai-helper-submit ${state.ai.helperLoading ? 'disabled' : ''}>${state.ai.helperLoading ? '正在查询…' : '问 AI'}</button>
       </div>
-      <div class="form-actions"><button type="button" class="btn btn-primary" data-ai-helper-submit ${state.ai.helperLoading ? 'disabled' : ''}>${state.ai.helperLoading ? '正在查询…' : '询问'}</button></div>
       ${state.ai.helperError ? `<p class="ai-error">${esc(state.ai.helperError)}</p>` : ''}
+      ${state.ai.helperRetry ? '<button type="button" class="btn" data-ai-helper-retry>重新尝试</button>' : ''}
       ${state.ai.helperLookup ? helperLookupHtml(state.ai.helperLookup) : ''}
       ${state.ai.helperAnswer ? `<div class="ai-helper-answer" aria-live="polite">${helperAnswerHtml(state.ai.helperAnswer)}</div>` : ''}
     </section>${aiSettingsHtml()}</div>`;
@@ -2371,7 +2374,7 @@ async function askEnglishHelper() {
   if (state.ai.helperLoading) return;
   const query = String($('#ai-helper-query')?.value || '').trim();
   if (!query) { state.ai.helperError = '请输入问题。'; renderAiHelper(); return; }
-  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null;
+  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null; state.ai.helperRetry = null;
   renderAiHelper();
   const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   try {
@@ -2380,7 +2383,10 @@ async function askEnglishHelper() {
     state.ai.helperAnswer = response.data.answer;
     state.ai.service = { provider: response.provider, model: response.model };
     rememberAiTiming('english_helper', response, started);
-  } catch { state.ai.helperError = 'AI 暂时无法回答，请稍后再试。'; }
+  } catch (error) {
+    state.ai.helperError = error?.message || 'AI 暂时无法回答，请重新尝试。';
+    state.ai.helperRetry = { kind: 'ask', query };
+  }
   finally { state.ai.helperLoading = false; renderAiHelper(); }
 }
 
@@ -2389,7 +2395,7 @@ async function runEnglishHelperShortcut(action) {
   const input = $('#ai-helper-query');
   const query = String(input?.value || '').trim();
   if (!query) { input?.focus(); return; }
-  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null;
+  state.ai.helperQuery = query; state.ai.helperLoading = true; state.ai.helperError = ''; state.ai.helperAnswer = ''; state.ai.helperLookup = null; state.ai.helperRetry = null;
   renderAiHelper();
   const started = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   try {
@@ -2415,8 +2421,151 @@ async function runEnglishHelperShortcut(action) {
       state.ai.service = { provider: response.provider, model: response.model };
       rememberAiTiming('english_helper', response, started);
     }
-  } catch { state.ai.helperError = 'AI 暂时无法回答，请稍后再试。'; }
+  } catch (error) {
+    state.ai.helperError = error?.message || 'AI 暂时无法回答，请重新尝试。';
+    state.ai.helperRetry = { kind: 'shortcut', action, query };
+  }
   finally { state.ai.helperLoading = false; renderAiHelper(); }
+}
+
+async function retryEnglishHelper() {
+  const retry = state.ai.helperRetry;
+  if (!retry || state.ai.helperLoading) return;
+  state.ai.helperQuery = retry.query;
+  renderAiHelper();
+  if (retry.kind === 'shortcut') await runEnglishHelperShortcut(retry.action);
+  else await askEnglishHelper();
+}
+
+function songDate(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function currentSong() {
+  const id = state.ai.song.current?.id;
+  return state.ai.songs.find((song) => song.id === id) || state.ai.song.current || null;
+}
+
+function renderSongLibrary() {
+  const songs = [...state.ai.songs].sort((a, b) => Number(b.lastStudiedAt || b.updatedAt) - Number(a.lastStudiedAt || a.updatedAt));
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-ai-mode="helper">← 返回英语助手</button>
+    <header class="ai-head"><div><h2>歌曲学习</h2><p>保存你自己粘贴的歌词，整首回看；挑选单词和好句进入现有复习系统。</p></div><button type="button" class="btn btn-primary" data-song-import>导入新歌词</button></header>
+    <section><h3>我的歌曲</h3>${songs.length ? `<div class="song-library">${songs.map((song) => `<article class="panel song-library-card">
+      <button type="button" class="song-library-open" data-song-open="${esc(song.id)}"><strong>${esc(song.title)}</strong>${song.artist ? `<span>${esc(song.artist)}</span>` : ''}<small>已学习 ${FlashSongLearning.learnedCount(song)} / ${song.lines.length} 句 · 上次学习 ${songDate(song.lastStudiedAt || song.updatedAt)}</small></button>
+      <button type="button" class="btn btn-danger" data-song-delete="${esc(song.id)}">删除</button></article>`).join('')}</div>` : '<div class="panel empty-panel"><p>还没有保存歌曲。</p><button type="button" class="btn btn-primary" data-song-import>导入新歌词</button></div>'}</section>
+    ${state.ai.song.error ? `<p class="ai-error">${esc(state.ai.song.error)}</p>` : ''}</div>`;
+}
+
+function renderSongImport() {
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
+    <header class="ai-head"><h2>导入新歌词</h2><p>只整理你粘贴的内容，不会联网补全歌词。</p></header>
+    <section class="panel song-import-panel"><label class="field"><span class="micro-label">原始歌词</span><textarea id="song-raw-lyrics" rows="16" placeholder="把歌词直接粘贴到这里。可以包含英文、中文和其它杂乱内容。">${esc(state.ai.song.rawLyrics)}</textarea></label>
+    <div class="form-actions"><button type="button" class="btn btn-primary" data-song-organize ${state.ai.song.loading ? 'disabled' : ''}>${state.ai.song.loading ? '正在整理…' : 'AI整理歌词'}</button><button type="button" class="btn" data-song-library>取消</button></div>
+    ${state.ai.song.error ? `<p class="ai-error">${esc(state.ai.song.error)}</p>` : ''}</section></div>`;
+}
+
+function songPreviewLineHtml(line, index) {
+  return `<article class="song-preview-line" data-song-preview-line="${index}"><div class="song-line-number">${index + 1}</div>
+    <label class="field"><span class="micro-label">英文原文</span><textarea data-song-line-english rows="2" required>${esc(line.english)}</textarea></label>
+    <label class="field"><span class="micro-label">用户原中文（可空）</span><textarea data-song-line-chinese rows="2">${esc(line.originalChinese)}</textarea></label>
+    <button type="button" class="btn btn-danger" data-song-remove-line="${index}">删除此行</button></article>`;
+}
+
+function renderSongPreview() {
+  const preview = state.ai.song.preview;
+  if (!preview) return renderSongImport();
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-import>← 返回原始歌词</button>
+    <header class="ai-head"><h2>整理结果预览</h2><p>请确认并修改后再保存；AI 不会自动写入歌曲库。</p></header>
+    <form class="panel song-preview" id="song-preview-form"><div class="song-meta-grid"><label class="field"><span class="micro-label">歌名</span><input id="song-preview-title" required value="${esc(preview.title)}"></label><label class="field"><span class="micro-label">歌手</span><input id="song-preview-artist" value="${esc(preview.artist)}"></label></div>
+    <div id="song-preview-lines">${preview.lines.map(songPreviewLineHtml).join('')}</div>
+    ${preview.ignored.length ? `<details><summary>已忽略内容（${preview.ignored.length}）</summary><ul>${preview.ignored.map((item) => `<li>${esc(item)}</li>`).join('')}</ul></details>` : ''}
+    ${preview.warnings.length ? `<div class="song-warnings"><div class="micro-label">需要人工确认</div><ul>${preview.warnings.map((item) => `<li>${esc(item)}</li>`).join('')}</ul></div>` : ''}
+    <p class="ai-error" id="song-preview-error" hidden></p><div class="form-actions"><button type="submit" class="btn btn-primary">保存歌曲</button><button type="button" class="btn" data-song-library>取消</button></div></form></div>`;
+}
+
+function songExplanationHtml(explanation) {
+  const value = FlashSongLearning.normalizeExplanation(explanation);
+  if (!value) return '';
+  return `<div class="song-ai-explanation"><div class="micro-label">AI理解</div>${value.naturalChinese ? `<p>${esc(value.naturalChinese)}</p>` : ''}${value.keyExpressions.length ? `<div><strong>关键表达：</strong>${esc(value.keyExpressions.join(' · '))}</div>` : ''}${value.structure ? `<div><strong>结构提示：</strong>${esc(value.structure)}</div>` : ''}</div>`;
+}
+
+function renderSongDetail() {
+  const song = currentSong();
+  if (!song) { state.ai.song.mode = 'library'; return renderSongLibrary(); }
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
+    <header class="ai-head"><div><h2>${esc(song.title)}</h2>${song.artist ? `<p>${esc(song.artist)}</p>` : ''}</div></header>
+    <div class="song-lines">${song.lines.map((line, index) => `<article class="panel song-line-card" data-song-line-id="${esc(line.id)}"><div class="song-line-head"><span class="micro-label">第 ${index + 1} 句</span>${line.learned ? '<span class="song-learned">✓ 已学习</span>' : ''}</div><p class="song-english">${esc(line.english)}</p>
+      ${line.originalChinese ? `<div class="song-original-translation"><div class="micro-label">原翻译</div><p>${esc(line.originalChinese)}</p></div>` : ''}${songExplanationHtml(line.aiExplanation)}
+      <div class="song-line-actions"><button type="button" class="btn" data-song-explain="${esc(line.id)}" ${state.ai.song.explainingLineId === line.id ? 'disabled' : ''}>${state.ai.song.explainingLineId === line.id ? '正在解释…' : line.aiExplanation ? '重新解释' : 'AI解释'}</button><button type="button" class="btn" data-song-speak="${esc(line.id)}">🔊 发音</button><button type="button" class="btn" data-song-add-sentence="${esc(line.id)}">加入长句</button><button type="button" class="btn" data-song-learned="${esc(line.id)}">${line.learned ? '取消已学习' : '标记已学习'}</button></div>
+      <form class="song-word-form" data-song-word-form="${esc(line.id)}"><input aria-label="查歌词单词" placeholder="输入这句中想学的单词"><button type="submit" class="btn">查单词</button></form></article>`).join('')}</div>
+    ${state.ai.song.error ? `<p class="ai-error">${esc(state.ai.song.error)}</p>` : ''}</div>`;
+}
+
+function renderSongView() {
+  if (state.ai.song.mode === 'import') renderSongImport();
+  else if (state.ai.song.mode === 'preview') renderSongPreview();
+  else if (state.ai.song.mode === 'detail') renderSongDetail();
+  else renderSongLibrary();
+}
+
+async function organizeSongLyrics() {
+  if (state.ai.song.loading) return;
+  const rawLyrics = String($('#song-raw-lyrics')?.value || state.ai.song.rawLyrics || '').trim();
+  if (!rawLyrics) { $('#song-raw-lyrics')?.focus(); return; }
+  state.ai.song.rawLyrics = rawLyrics; state.ai.song.loading = true; state.ai.song.error = ''; renderSongImport();
+  try {
+    const request = FlashAiLearning.buildOrganizeLyricsRequest(rawLyrics);
+    const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    state.ai.song.preview = FlashSongLearning.normalizeOrganizedLyrics(response.data);
+    state.ai.song.mode = 'preview';
+    state.ai.service = { provider: response.provider, model: response.model };
+  } catch (error) { state.ai.song.error = error?.message || 'AI 暂时无法整理歌词，请重新尝试。'; }
+  finally { state.ai.song.loading = false; renderSongView(); }
+}
+
+function collectSongPreview() {
+  return {
+    title: $('#song-preview-title')?.value || '', artist: $('#song-preview-artist')?.value || '',
+    lines: [...document.querySelectorAll('[data-song-preview-line]')].map((row, index) => ({
+      id: `line_${index + 1}`, english: row.querySelector('[data-song-line-english]').value,
+      originalChinese: row.querySelector('[data-song-line-chinese]').value, aiExplanation: null, learned: false,
+    })),
+  };
+}
+
+async function saveSongPreview() {
+  const error = $('#song-preview-error');
+  try {
+    assertRestoreResolved();
+    const fields = collectSongPreview();
+    const song = await ArticleStore.createSong(fields);
+    state.ai.songs.push(song); state.ai.song.current = song; state.ai.song.preview = null; state.ai.song.rawLyrics = ''; state.ai.song.mode = 'detail';
+    renderSongDetail();
+  } catch (err) { if (error) { error.hidden = false; error.textContent = err.message; } }
+}
+
+async function persistSong(song, fields) {
+  assertRestoreResolved();
+  const updated = await ArticleStore.updateSong(song.id, fields);
+  const index = state.ai.songs.findIndex((item) => item.id === updated.id);
+  if (index !== -1) state.ai.songs[index] = updated;
+  state.ai.song.current = updated;
+  return updated;
+}
+
+async function explainSongLine(lineId) {
+  const song = currentSong(); const line = song?.lines.find((item) => item.id === lineId);
+  if (!song || !line || state.ai.song.explainingLineId) return;
+  state.ai.song.explainingLineId = lineId; state.ai.song.error = ''; renderSongDetail();
+  try {
+    const request = FlashAiLearning.buildExplainLyricRequest(line.english, line.originalChinese);
+    const response = await aiFetch('/ai', { method: 'POST', body: JSON.stringify(request) });
+    const lines = song.lines.map((item) => item.id === lineId ? { ...item, aiExplanation: FlashSongLearning.normalizeExplanation(response.data) } : item);
+    await persistSong(song, { lines, lastStudiedAt: Date.now() });
+  } catch (error) { state.ai.song.error = error?.message || 'AI 暂时无法解释，请重新尝试。'; }
+  finally { state.ai.song.explainingLineId = ''; renderSongDetail(); }
 }
 
 function renderAiSentences() {
@@ -2428,7 +2577,7 @@ function renderAiSentences() {
     const exists = FlashArticleUtils.sentenceExists(state.cards, sentence.english);
     return `<article class="panel ai-sentence-card"><p>${aiSentenceTextHtml(sentence, index, lookup)}</p>
       ${aiSentenceFocusHtml(state.ai.targets, sentence.targetWordsUsed)}
-      <div class="ai-card-actions"><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="1">🔊 正常</button><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="0.75">🐢 慢速</button><button class="btn" type="button" data-ai-pronounce="${esc(sentence.english)}">AI发音</button>
+      <div class="ai-card-actions"><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="1">🔊 标准发音</button><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="0.75">🐢 慢速</button><button class="btn" type="button" data-ai-pronounce="${esc(sentence.english)}" data-ai-pronunciation-label="更多声音">更多声音</button>
       <button class="btn" type="button" data-ai-reveal="${index}">${state.ai.revealed.has(index) ? '隐藏参考翻译' : '查看参考翻译'}</button>
       ${exists ? '<span class="ai-exists">已存在于长句库</span>' : `<button class="btn btn-primary" type="button" data-ai-add-sentence="${index}">加入长句库</button>`}</div>
       ${state.ai.revealed.has(index) ? `<p class="ai-translation">${esc(sentence.referenceChinese)}</p>` : ''}</article>`;
@@ -2461,6 +2610,7 @@ function renderAiView() {
   if (state.ai.mode === 'sentences') renderAiSentences();
   else if (state.ai.mode === 'article') renderAiArticle();
   else if (state.ai.mode === 'helper') renderAiHelper();
+  else if (state.ai.mode === 'songs') renderSongView();
   else renderAiHome();
 }
 
@@ -2902,9 +3052,9 @@ function openAiSentenceWord(word, sentence, {
         ${detail('🧠 发音拆解', result.memoryReading)}${detail('🗣 中文近似', result.chineseReading)}`
       : ''}
     <div class="article-sheet-actions">
-      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 正常发音</button>
+      <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 标准发音</button>
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
-      <button type="button" class="btn" data-ai-pronounce="${esc(word)}">AI发音</button>
+      <button type="button" class="btn" data-ai-pronounce="${esc(word)}" data-ai-pronunciation-label="更多声音">更多声音</button>
       ${reading ? (unknown
         ? `<button type="button" class="btn" data-article-known="${esc(word)}" data-article-sentence="${esc(sentence)}">我现在认识了</button>`
         : `<button type="button" class="btn" data-article-unknown="${esc(word)}" data-article-sentence="${esc(sentence)}">标记不认识</button>`) : ''}
@@ -3054,7 +3204,7 @@ function openArticleSentence(text) {
     <div class="micro-label">完整句子</div><p class="article-sheet-sentence">${esc(text)}</p>
     ${saved ? '<p class="article-learned-label">已保存到长句库</p>' : ''}
     <div class="article-sheet-actions">
-      <button type="button" class="btn" data-article-speak="${esc(text)}" data-rate="1">🔊 正常发音</button>
+      <button type="button" class="btn" data-article-speak="${esc(text)}" data-rate="1">🔊 标准发音</button>
       <button type="button" class="btn" data-article-speak="${esc(text)}" data-rate="0.75">🐢 慢速发音</button>
       ${saved ? '' : `<button type="button" class="btn btn-primary" data-article-add-sentence="${esc(text)}">保存为长句</button>`}
     </div></div>`;
@@ -3100,6 +3250,7 @@ function backupSummaryHtml(summary) {
   return `<div><dt>导出时间</dt><dd>${esc(new Date(summary.exportedAt).toLocaleString('zh-CN'))}</dd></div>
     <div><dt>单词</dt><dd>${summary.words} 个</dd></div>
     <div><dt>文章</dt><dd>${summary.articles} 篇</dd></div>
+    <div><dt>歌曲</dt><dd>${summary.songs} 首</dd></div>
     <div><dt>Review 记录</dt><dd>${summary.history} 条</dd></div>
     <div><dt>学习统计</dt><dd>已包含</dd></div>`;
 }
@@ -3113,7 +3264,7 @@ async function exportFullBackup() {
   link.href = url;
   link.download = `flashdesk-backup-${backup.exportedAt.slice(0, 10)}.json`;
   document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-  $('#backup-status').textContent = `已导出：${summary.words} 个单词、${summary.articles} 篇文章、${summary.history} 条 Review 记录。`;
+  $('#backup-status').textContent = `已导出：${summary.words} 个单词、${summary.articles} 篇文章、${summary.songs} 首歌曲、${summary.history} 条 Review 记录。`;
 }
 
 async function applyFullBackupStages(backup) {
@@ -3459,7 +3610,7 @@ function bindEvents() {
     try {
       const summary = FlashBackup.summary(state.backup.pending);
       await restoreFullBackup(state.backup.pending);
-      $('#backup-status').textContent = `恢复成功：${summary.words} 个单词、${summary.articles} 篇文章、${summary.due} 张待复习。正在刷新…`;
+      $('#backup-status').textContent = `恢复成功：${summary.words} 个单词、${summary.articles} 篇文章、${summary.songs} 首歌曲、${summary.due} 张待复习。正在刷新…`;
       setTimeout(() => location.reload(), 700);
     } catch (err) {
       $('#backup-status').textContent = err.message;
@@ -3843,10 +3994,14 @@ function bindEvents() {
     } else if (button.dataset.aiMode) {
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
       state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
+    } else if (button.hasAttribute('data-ai-song-home')) {
+      state.ai.mode = 'songs'; state.ai.song.mode = 'library'; state.ai.song.error = ''; renderSongLibrary();
     } else if (button.dataset.aiHelperAction !== undefined) {
       await runEnglishHelperShortcut(button.dataset.aiHelperAction);
     } else if (button.hasAttribute('data-ai-helper-submit')) {
       await askEnglishHelper();
+    } else if (button.hasAttribute('data-ai-helper-retry')) {
+      await retryEnglishHelper();
     } else if (button.dataset.aiHelperAddWord !== undefined) {
       openAiSentenceWord(button.dataset.aiHelperAddWord, '', { editing: true });
     } else if (button.dataset.aiHelperWordCandidate !== undefined) {
@@ -3879,6 +4034,44 @@ function bindEvents() {
       await playAiPronunciation(button.dataset.aiPronounce, button);
     } else if (button.dataset.aiSpeak !== undefined) {
       playEnglish(button.dataset.aiSpeak, { rate: Number(button.dataset.rate) || 1, button });
+    } else if (button.hasAttribute('data-song-import')) {
+      state.ai.song.mode = 'import'; state.ai.song.error = ''; renderSongImport();
+    } else if (button.hasAttribute('data-song-library')) {
+      state.ai.song.mode = 'library'; state.ai.song.current = null; state.ai.song.error = ''; renderSongLibrary();
+    } else if (button.dataset.songOpen !== undefined) {
+      const song = state.ai.songs.find((item) => item.id === button.dataset.songOpen);
+      if (song) { state.ai.song.current = song; state.ai.song.mode = 'detail'; state.ai.song.error = ''; renderSongDetail(); }
+    } else if (button.dataset.songDelete !== undefined) {
+      const song = state.ai.songs.find((item) => item.id === button.dataset.songDelete);
+      if (song && confirm(`确定删除歌曲“${song.title}”？`)) {
+        try {
+          assertRestoreResolved(); await ArticleStore.deleteSong(song.id);
+          state.ai.songs = state.ai.songs.filter((item) => item.id !== song.id); renderSongLibrary();
+        } catch (error) { state.ai.song.error = `删除失败：${error.message}`; renderSongLibrary(); }
+      }
+    } else if (button.hasAttribute('data-song-organize')) {
+      await organizeSongLyrics();
+    } else if (button.dataset.songRemoveLine !== undefined) {
+      const current = collectSongPreview();
+      current.lines.splice(Number(button.dataset.songRemoveLine), 1);
+      state.ai.song.preview = { ...state.ai.song.preview, ...current };
+      renderSongPreview();
+    } else if (button.dataset.songExplain !== undefined) {
+      await explainSongLine(button.dataset.songExplain);
+    } else if (button.dataset.songSpeak !== undefined) {
+      const line = currentSong()?.lines.find((item) => item.id === button.dataset.songSpeak);
+      if (line) playEnglish(line.english, { rate: 1, button });
+    } else if (button.dataset.songAddSentence !== undefined) {
+      const song = currentSong(); const line = song?.lines.find((item) => item.id === button.dataset.songAddSentence);
+      if (line) prefillArticleCard('Sentences', line.english, line.originalChinese || line.aiExplanation?.naturalChinese || '待补充中文意思');
+    } else if (button.dataset.songLearned !== undefined) {
+      const song = currentSong(); const line = song?.lines.find((item) => item.id === button.dataset.songLearned);
+      if (song && line) {
+        try {
+          const lines = song.lines.map((item) => item.id === line.id ? { ...item, learned: !item.learned } : item);
+          await persistSong(song, { lines, lastStudiedAt: Date.now() }); renderSongDetail();
+        } catch (error) { state.ai.song.error = error.message; renderSongDetail(); }
+      }
     } else if (button.dataset.aiReveal !== undefined) {
       const index = Number(button.dataset.aiReveal); if (state.ai.revealed.has(index)) state.ai.revealed.delete(index); else state.ai.revealed.add(index); renderAiSentences();
     } else if (button.dataset.aiParagraphTranslation !== undefined) {
@@ -3910,6 +4103,19 @@ function bindEvents() {
         await openArticle(article.id);
       } catch (err) { state.ai.error = `保存失败：${err.message}`; button.disabled = false; renderAiArticle(); }
     }
+  });
+
+  $('#ai-root').addEventListener('submit', async (e) => {
+    if (e.target.id === 'song-preview-form') {
+      e.preventDefault(); await saveSongPreview(); return;
+    }
+    const wordForm = e.target.closest('[data-song-word-form]');
+    if (!wordForm) return;
+    e.preventDefault();
+    const song = currentSong(); const line = song?.lines.find((item) => item.id === wordForm.dataset.songWordForm);
+    const word = wordForm.querySelector('input')?.value.trim();
+    if (line && word) await lookupAiSentenceWord(word, line.english);
+    else wordForm.querySelector('input')?.focus();
   });
 
   $('#add-form').addEventListener('submit', async (e) => {
@@ -4116,6 +4322,11 @@ async function init() {
     state.ai.drafts = await ArticleStore.listAiDrafts();
   } catch {
     state.ai.drafts = [];
+  }
+  try {
+    state.ai.songs = await ArticleStore.listSongs();
+  } catch {
+    state.ai.songs = [];
   }
   try {
     const unknownWords = await ArticleStore.getUnknownWords();

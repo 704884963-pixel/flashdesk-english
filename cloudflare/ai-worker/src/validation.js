@@ -1,6 +1,6 @@
 import { normalizeProvider } from './providers/index.js';
 
-export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper']);
+export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper', 'organize_lyrics', 'explain_lyric']);
 
 export function stripJsonFence(value) {
   const text = String(value || '').trim();
@@ -54,6 +54,30 @@ export function validateAiData(task, data, context = {}) {
   if (task === 'english_helper') {
     if (!nonempty(data.answer)) throw new Error('invalid helper answer');
     return { answer: data.answer.trim() };
+  }
+  if (task === 'organize_lyrics') {
+    if (typeof data.title !== 'string' || typeof data.artist !== 'string'
+      || !Array.isArray(data.lines) || !data.lines.length
+      || !Array.isArray(data.ignored) || !Array.isArray(data.warnings)) throw new Error('invalid organized lyrics');
+    const lines = data.lines.map((line) => {
+      if (!line || typeof line !== 'object' || Array.isArray(line)
+        || !nonempty(line.english) || typeof line.originalChinese !== 'string') throw new Error('invalid lyric line');
+      return { english: line.english.trim(), originalChinese: line.originalChinese.trim() };
+    });
+    const stringList = (value) => value.map((item) => {
+      if (typeof item !== 'string') throw new Error('invalid lyric notes');
+      return item.trim();
+    }).filter(Boolean);
+    return { title: data.title.trim(), artist: data.artist.trim(), lines, ignored: stringList(data.ignored), warnings: stringList(data.warnings) };
+  }
+  if (task === 'explain_lyric') {
+    if (!nonempty(data.naturalChinese) || !Array.isArray(data.keyExpressions)
+      || data.keyExpressions.some((item) => !nonempty(item)) || typeof data.structure !== 'string') throw new Error('invalid lyric explanation');
+    return {
+      naturalChinese: data.naturalChinese.trim(),
+      keyExpressions: data.keyExpressions.map((item) => item.trim()).slice(0, 8),
+      structure: data.structure.trim(),
+    };
   }
   if (task === 'generate_sentences') {
     if (!Array.isArray(data.sentences) || data.sentences.length !== 1) throw new Error('invalid sentences');
@@ -115,6 +139,15 @@ export function validateClientRequest(body) {
   if (body.task === 'english_helper') {
     if (!nonempty(body.context.query)) throw new Error('invalid helper query');
     return { task: body.task, context: { query: body.context.query.trim() }, options: {}, provider };
+  }
+  if (body.task === 'organize_lyrics') {
+    if (!nonempty(body.context.rawLyrics) || body.context.rawLyrics.length > 40000) throw new Error('invalid lyrics context');
+    return { task: body.task, context: { rawLyrics: body.context.rawLyrics.trim() }, options: {}, provider };
+  }
+  if (body.task === 'explain_lyric') {
+    if (!nonempty(body.context.english) || body.context.english.length > 1000
+      || (body.context.originalChinese !== undefined && typeof body.context.originalChinese !== 'string')) throw new Error('invalid lyric explanation context');
+    return { task: body.task, context: { english: body.context.english.trim(), originalChinese: String(body.context.originalChinese || '').trim() }, options: {}, provider };
   }
   if (body.task === 'translate_article') {
     if (!nonempty(body.context.title) || !words(body.context.paragraphs) || !body.context.paragraphs.length) throw new Error('invalid article translation context');
