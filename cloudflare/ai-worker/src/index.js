@@ -46,7 +46,7 @@ export function generationOptions(task, env, providerName = 'zhipu') {
     return {
       model: providerModel('gemini', env),
       maxOutputTokens,
-      ...(task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric' ? {
+      ...(task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric' || task === 'organize_lyrics' ? {
         temperature: 0.1,
         reasoning: false,
       } : {}),
@@ -55,13 +55,13 @@ export function generationOptions(task, env, providerName = 'zhipu') {
         : task === 'generate_sentences' ? 45000 : 60000,
     };
   }
-  if (task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric') {
+  if (task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric' || task === 'organize_lyrics') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
       maxOutputTokens,
       temperature: 0.1,
       reasoning: false,
-      timeoutMs: 15000,
+      timeoutMs: task === 'organize_lyrics' ? 60000 : 15000,
     };
   }
   if (task === 'translate_article') {

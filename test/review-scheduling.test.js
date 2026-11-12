@@ -150,14 +150,11 @@ test('Review renders three horizontal grade buttons including the secondary easy
   assert.match(styles, /\.btn-easy\s*{[^}]*background:\s*var\(--accent-dim\)[^}]*border-color:\s*var\(--accent\)/s);
 });
 
-test('Review exposes AI pronunciation beside normal and slow speech without grading', () => {
+test('Review exposes only standard and slow pronunciation without changing grading', () => {
   const render = appSource.slice(appSource.indexOf('function renderReview()'), appSource.indexOf('function setFlipped'));
   const handler = appSource.slice(appSource.indexOf("$('#review-area').addEventListener('click'"), appSource.indexOf("$('#quiz-area').addEventListener('click'"));
-  assert.match(render, /id="speak-front"[\s\S]*id="speak-front-slow"[\s\S]*id="speak-front-ai"/);
-  assert.match(render, /data-review-ai-pronounce/);
-  assert.match(handler, /matches\('\[data-review-ai-pronounce\]'\)[\s\S]*playAiPronunciation\(card\.front, b\)/);
-  const aiBranch = handler.slice(handler.indexOf("matches('[data-review-ai-pronounce]')"), handler.indexOf("matches('[data-speak-rate]')"));
-  assert.match(aiBranch, /preventDefault\(\)/);
-  assert.match(aiBranch, /stopPropagation\(\)/);
-  assert.doesNotMatch(aiBranch, /grade\(/);
+  assert.match(render, /id="speak-front"[\s\S]*id="speak-front-slow"/);
+  assert.doesNotMatch(render, /speak-front-ai|data-review-ai-pronounce|更多声音|AI发音/);
+  assert.doesNotMatch(handler, /data-review-ai-pronounce|playAiPronunciation/);
+  assert.match(handler, /matches\('\[data-speak-rate\]'\)[\s\S]*playEnglish\(card\.front/);
 });

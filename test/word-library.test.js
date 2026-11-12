@@ -191,39 +191,23 @@ test('pronunciation click stops propagation and never opens detail', () => {
   assert.equal(h.run('JSON.stringify(played[0])'), JSON.stringify({ text: 'approach', rate: 0.75 }));
 });
 
-test('Word card places a compact AI pronunciation action outside the two-button speech column', () => {
+test('Word card exposes only the two standard ElevenLabs speech actions', () => {
   const h = libraryClient();
   const html = h.run("wordListItemHtml(state.cards.find(card => card.id === '137'), now)");
-  assert.match(html, /word-list-heading[\s\S]*approach[\s\S]*data-word-ai-pronounce="137"[\s\S]*word-speech-actions/);
   assert.equal((html.match(/data-word-speak=/g) || []).length, 2);
-  assert.equal((html.match(/data-word-ai-pronounce=/g) || []).length, 1);
-  assert.doesNotMatch(h.run("wordSpeechButtons(state.cards.find(card => card.id === '137'))"), /AI发音|word-ai-pronounce/);
+  assert.doesNotMatch(html, /data-word-ai-pronounce|更多声音|AI发音|word-ai-pronounce/);
+  assert.match(html, /标准发音[\s\S]*慢速/);
 });
 
-test('Word card AI pronunciation uses card.front and cannot open the detail view', () => {
+test('Word card click handler has no Aura pronunciation entry', () => {
   const h = libraryClient();
-  h.run(`
-    globalThis.aiPlayed = [];
-    playAiPronunciation = (text, button) => { aiPlayed.push({ text, button }); return Promise.resolve(); };
-    globalThis.aiButton = { dataset: { wordAiPronounce: '137' } };
-    globalThis.aiSpeechEvent = {
-      prevented: false,
-      stopped: false,
-      target: { closest: (selector) => selector === '[data-word-ai-pronounce]' ? aiButton : null },
-      preventDefault() { this.prevented = true; },
-      stopPropagation() { this.stopped = true; },
-    };
-    handleWordLibraryClick(aiSpeechEvent);
-  `);
-  assert.equal(h.run('state.wordLibrary.selectedId'), null);
-  assert.equal(h.run('aiSpeechEvent.prevented && aiSpeechEvent.stopped'), true);
-  assert.equal(h.run('aiPlayed[0].text'), 'approach');
+  assert.doesNotMatch(h.run('handleWordLibraryClick.toString()'), /wordAiPronounce|playAiPronunciation/);
 });
 
-test('compact Word AI pronunciation and three Review controls remain mobile-safe', () => {
+test('two-button Word pronunciation layout remains mobile-safe without an empty Aura column', () => {
   const styles = fs.readFileSync(path.join(__dirname, '../public/styles.css'), 'utf8');
-  assert.match(styles, /\.word-list-item\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto auto/s);
-  assert.match(styles, /\.word-ai-pronounce\s*{[^}]*min-height:\s*32px[^}]*white-space:\s*nowrap/s);
+  assert.match(styles, /\.word-list-item\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s);
+  assert.doesNotMatch(styles, /\.word-ai-pronounce/);
   assert.match(styles, /@media \(max-width:\s*560px\)[\s\S]*\.speech-actions \.speak-front\s*{[^}]*flex:\s*1 1 0[^}]*min-width:\s*0/s);
   assert.match(styles, /\.word-list-heading strong\s*{[^}]*overflow:\s*hidden[^}]*white-space:\s*nowrap/s);
 });

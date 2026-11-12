@@ -39,10 +39,10 @@ test('helper lookup uses standard playEnglish and never Aura pronunciation', () 
   assert.match(section, /data-ai-speak/);
   assert.doesNotMatch(section, /data-ai-pronounce|AI发音/);
 });
-test('Review names ElevenLabs baseline and keeps Aura as more voices', () => {
+test('Review exposes only ElevenLabs standard and slow pronunciation', () => {
   const section = app.slice(app.indexOf('function renderReview'), app.indexOf('function setFlipped'));
-  assert.match(section, /标准发音/); assert.match(section, /慢速/); assert.match(section, /更多声音/);
-  assert.match(section, /data-review-ai-pronounce/);
+  assert.match(section, /标准发音/); assert.match(section, /慢速/);
+  assert.doesNotMatch(section, /更多声音|AI发音|data-review-ai-pronounce/);
 });
 test('song organization preview is explicit and never saves automatically', () => {
   const organize = app.slice(app.indexOf('async function organizeSongLyrics'), app.indexOf('function collectSongPreview'));
@@ -60,6 +60,18 @@ test('AI failure retains helper input and exposes an exact-request retry', () =>
   assert.match(app, /helperRetry = \{ kind: 'shortcut', action, query \}/);
   assert.match(app, /data-ai-helper-retry/);
   assert.match(app, /retry\.kind === 'shortcut'.*runEnglishHelperShortcut/s);
+});
+test('lyrics timeout keeps the original input and allows the same organize action to retry', () => {
+  const organize = app.slice(app.indexOf('async function organizeSongLyrics'), app.indexOf('function collectSongPreview'));
+  assert.match(organize, /state\.ai\.song\.rawLyrics = rawLyrics/);
+  assert.match(organize, /歌词整理超时，原始歌词已保留，请重新尝试。/);
+  assert.doesNotMatch(organize, /rawLyrics\s*=\s*''|createSong|saveNewCard|addCard/);
+  assert.match(app, /data-song-organize[\s\S]*await organizeSongLyrics\(\)/);
+});
+test('lyrics input has an explicit non-truncating upper bound', () => {
+  assert.equal(Ai.MAX_LYRICS_CHARS, 12000);
+  assert.throws(() => Ai.buildOrganizeLyricsRequest('x'.repeat(12001)), /歌词内容过长/);
+  assert.equal(Ai.buildOrganizeLyricsRequest('x'.repeat(12000)).context.rawLyrics.length, 12000);
 });
 test('song UI remains a single-column readable flow at 375px', () => {
   const mobile = styles.slice(styles.indexOf('@media (max-width: 560px)'));

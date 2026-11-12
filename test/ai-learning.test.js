@@ -860,15 +860,17 @@ test('inline AI save refreshes lookup without replacing the generated result', (
 test('AI word click is handled before other AI Sentence controls', () => { const handler = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'")); assert.ok(handler.indexOf("closest('[data-ai-sentence-word]')") < handler.indexOf("closest('button')")); });
 test('Article Word click handling remains in its original priority position', () => { const handler = appSource.slice(appSource.indexOf("$('#article-root').addEventListener('click'"), appSource.indexOf("$('#article-action-close')")); assert.ok(handler.indexOf("closest('[data-article-word]')") < handler.indexOf("closest('[data-sentence-index]')")); });
 
-test('Today Sentence AI pronunciation sends the complete generated sentence', () => {
+test('Today Sentence exposes standard and slow playback without Aura UI', () => {
   const render = appSource.slice(appSource.indexOf('function renderAiSentences'), appSource.indexOf('function renderAiArticle'));
-  assert.match(render, /data-ai-pronounce="\$\{esc\(sentence\.english\)\}"/);
+  assert.match(render, /data-ai-speak="\$\{esc\(sentence\.english\)\}"[^>]*data-rate="1"/);
+  assert.match(render, /data-ai-speak="\$\{esc\(sentence\.english\)\}"[^>]*data-rate="0\.75"/);
+  assert.doesNotMatch(render, /data-ai-pronounce|更多声音|AI发音/);
 });
 
-test('AI Sentence Word dialog pronounces the exact clicked token', () => {
+test('AI Sentence Word dialog uses standard playback for the exact clicked token', () => {
   const dialog = appSource.slice(appSource.indexOf('function openAiSentenceWord'), appSource.indexOf('async function lookupAiSentenceWord'));
-  assert.match(dialog, /data-ai-pronounce="\$\{esc\(word\)\}"/);
-  assert.doesNotMatch(dialog, /data-ai-pronounce="\$\{esc\((?:draft\.front|result\.baseForm|card\.front)\)\}"/);
+  assert.match(dialog, /data-article-speak="\$\{esc\(word\)\}"/);
+  assert.doesNotMatch(dialog, /data-ai-pronounce|更多声音|AI发音/);
 });
 
 test('Reading Word delegates to the shared lookup dialog and keeps pronunciation controls', () => {
@@ -878,13 +880,13 @@ test('Reading Word delegates to the shared lookup dialog and keeps pronunciation
   assert.match(shared, /data-article-speak/);
 });
 
-test('AI pronunciation controls use their independent playback function', () => {
+test('ordinary AI and Reading controls expose only the standard playEnglish pipeline', () => {
   const articleActions = appSource.slice(appSource.indexOf("$('#article-action-content').addEventListener('click'"), appSource.indexOf("$('#article-action-content').addEventListener('submit'"));
   const aiActions = appSource.slice(appSource.indexOf("$('#ai-root').addEventListener('click'"), appSource.indexOf("$('#add-form').addEventListener('submit'"));
-  assert.match(articleActions, /playAiPronunciation\(button\.dataset\.aiPronounce, button\)/);
-  assert.match(aiActions, /playAiPronunciation\(button\.dataset\.aiPronounce, button\)/);
   assert.match(articleActions, /playEnglish\(button\.dataset\.articleSpeak/);
   assert.match(aiActions, /playEnglish\(button\.dataset\.aiSpeak/);
+  assert.doesNotMatch(articleActions, /playAiPronunciation|aiPronounce/);
+  assert.doesNotMatch(aiActions, /playAiPronunciation|aiPronounce/);
 });
 
 test('AI pronunciation is ephemeral and bypasses the existing audio cache', () => {

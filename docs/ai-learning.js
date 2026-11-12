@@ -273,6 +273,7 @@
   const AI_PROVIDER_KEY = 'flashdesk-ai-provider';
   const AI_PROVIDERS = Object.freeze(['zhipu', 'gemini']);
   const DEFAULT_AI_PROVIDER = 'zhipu';
+  const MAX_LYRICS_CHARS = 12000;
 
   function normalizeAiProvider(value) {
     return AI_PROVIDERS.includes(value) ? value : DEFAULT_AI_PROVIDER;
@@ -311,6 +312,7 @@
   function buildOrganizeLyricsRequest(rawLyrics) {
     const value = String(rawLyrics || '').trim();
     if (!value) throw new Error('请先粘贴歌词');
+    if (value.length > MAX_LYRICS_CHARS) throw new Error(`歌词内容过长，请缩短到 ${MAX_LYRICS_CHARS} 个字符以内后重试。`);
     return buildAiRequest('organize_lyrics', { rawLyrics: value });
   }
 
@@ -464,7 +466,7 @@
     buildLookupWordRequest, buildEnglishHelperRequest, buildEnglishHelperShortcutRequest,
     buildOrganizeLyricsRequest, buildExplainLyricRequest,
     compactLookupMeaning, wordDraftFromLookup, mergeMeanings,
-    AI_PROVIDER_KEY, AI_PROVIDERS, DEFAULT_AI_PROVIDER,
+    AI_PROVIDER_KEY, AI_PROVIDERS, DEFAULT_AI_PROVIDER, MAX_LYRICS_CHARS,
     normalizeAiProvider, loadAiProvider, saveAiProvider, withAiProvider,
   };
   global.FlashAiLearning = api;

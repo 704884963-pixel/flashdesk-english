@@ -1149,8 +1149,6 @@ function renderReview() {
             title="美式英语正常发音" aria-label="${normalLabel}">${normalLabel}</button>
           <button type="button" class="speak-front" id="speak-front-slow" data-speak-rate="0.75"
             title="美式英语慢速发音" aria-label="${slowLabel}">${slowLabel}</button>
-          <button type="button" class="speak-front speak-ai" id="speak-front-ai" data-review-ai-pronounce
-            data-ai-pronunciation-label="更多声音" title="听其它声音" aria-label="更多声音">更多声音</button>
         </div>
       </div>
       <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
@@ -1619,9 +1617,6 @@ function wordListItemHtml(card, now = Date.now()) {
         ${hasHistoricalLapse(card) ? `<span class="word-list-forgotten">· 曾忘 ${lapses} 次</span>` : ''}
       </span>
     </button>
-    <button type="button" class="word-ai-pronounce" data-word-ai-pronounce="${esc(card.id)}"
-      data-ai-pronunciation-label="更多声音" data-ai-pronunciation-loading-label="加载中…"
-      aria-label="更多声音 ${esc(card.front)}">更多声音</button>
     ${wordSpeechButtons(card)}
   </article>`;
 }
@@ -1719,14 +1714,6 @@ function openEditDialog(card) {
 }
 
 function handleWordLibraryClick(e) {
-  const aiSpeech = e.target.closest('[data-word-ai-pronounce]');
-  if (aiSpeech) {
-    e.preventDefault();
-    e.stopPropagation();
-    const card = state.cards.find((item) => item.id === aiSpeech.dataset.wordAiPronounce && item.deck === 'Words');
-    if (card) void playAiPronunciation(card.front, aiSpeech);
-    return;
-  }
   const speech = e.target.closest('[data-word-speak]');
   if (speech) {
     e.preventDefault();
@@ -2521,7 +2508,11 @@ async function organizeSongLyrics() {
     state.ai.song.preview = FlashSongLearning.normalizeOrganizedLyrics(response.data);
     state.ai.song.mode = 'preview';
     state.ai.service = { provider: response.provider, model: response.model };
-  } catch (error) { state.ai.song.error = error?.message || 'AI 暂时无法整理歌词，请重新尝试。'; }
+  } catch (error) {
+    state.ai.song.error = error?.code === 'TIMEOUT'
+      ? '歌词整理超时，原始歌词已保留，请重新尝试。'
+      : error?.message || 'AI 暂时无法整理歌词，请重新尝试。';
+  }
   finally { state.ai.song.loading = false; renderSongView(); }
 }
 
@@ -2577,7 +2568,7 @@ function renderAiSentences() {
     const exists = FlashArticleUtils.sentenceExists(state.cards, sentence.english);
     return `<article class="panel ai-sentence-card"><p>${aiSentenceTextHtml(sentence, index, lookup)}</p>
       ${aiSentenceFocusHtml(state.ai.targets, sentence.targetWordsUsed)}
-      <div class="ai-card-actions"><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="1">🔊 标准发音</button><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="0.75">🐢 慢速</button><button class="btn" type="button" data-ai-pronounce="${esc(sentence.english)}" data-ai-pronunciation-label="更多声音">更多声音</button>
+      <div class="ai-card-actions"><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="1">🔊 标准发音</button><button class="btn" type="button" data-ai-speak="${esc(sentence.english)}" data-rate="0.75">🐢 慢速</button>
       <button class="btn" type="button" data-ai-reveal="${index}">${state.ai.revealed.has(index) ? '隐藏参考翻译' : '查看参考翻译'}</button>
       ${exists ? '<span class="ai-exists">已存在于长句库</span>' : `<button class="btn btn-primary" type="button" data-ai-add-sentence="${index}">加入长句库</button>`}</div>
       ${state.ai.revealed.has(index) ? `<p class="ai-translation">${esc(sentence.referenceChinese)}</p>` : ''}</article>`;
@@ -3054,7 +3045,6 @@ function openAiSentenceWord(word, sentence, {
     <div class="article-sheet-actions">
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="1">🔊 标准发音</button>
       <button type="button" class="btn" data-article-speak="${esc(word)}" data-rate="0.75">🐢 慢速发音</button>
-      <button type="button" class="btn" data-ai-pronounce="${esc(word)}" data-ai-pronunciation-label="更多声音">更多声音</button>
       ${reading ? (unknown
         ? `<button type="button" class="btn" data-article-known="${esc(word)}" data-article-sentence="${esc(sentence)}">我现在认识了</button>`
         : `<button type="button" class="btn" data-article-unknown="${esc(word)}" data-article-sentence="${esc(sentence)}">标记不认识</button>`) : ''}
@@ -3659,11 +3649,6 @@ function bindEvents() {
     saveSpeechSettings();
   });
 
-  $('#ai-pronunciation-speaker').addEventListener('change', (e) => {
-    aiPronunciationSpeaker = saveAiPronunciationSpeaker(e.target.value);
-    e.target.value = aiPronunciationSpeaker;
-  });
-
   $('#speech-test').addEventListener('click', () => {
     previewSpeech();
   });
@@ -3706,12 +3691,7 @@ function bindEvents() {
     }
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.matches('[data-review-ai-pronounce]')) {
-      e.preventDefault();
-      e.stopPropagation();
-      const card = state.cards.find((c) => c.id === state.session.currentId);
-      if (card) void playAiPronunciation(card.front, b);
-    } else if (b.matches('[data-speak-rate]')) {
+    if (b.matches('[data-speak-rate]')) {
       e.stopPropagation();
       const card = state.cards.find((c) => c.id === state.session.currentId);
       if (card) playEnglish(card.front, { rate: Number(b.dataset.speakRate), button: b });
@@ -3921,8 +3901,6 @@ function bindEvents() {
       openAiSentenceWord(button.dataset.aiWord, button.dataset.aiSentence, {
         reading: button.dataset.aiReading === 'true', cardId: button.dataset.aiWordCandidate,
       });
-    } else if (button.dataset.aiPronounce !== undefined) {
-      await playAiPronunciation(button.dataset.aiPronounce, button);
     } else if (button.dataset.articleSpeak !== undefined) {
       playEnglish(button.dataset.articleSpeak, { rate: Number(button.dataset.rate) || 1, button });
     } else if (button.dataset.aiRetryWord !== undefined) {
@@ -4030,8 +4008,6 @@ function bindEvents() {
       } else {
         await startAiArticleNarration(state.ai.narrationSpeed, paragraphIndex);
       }
-    } else if (button.dataset.aiPronounce !== undefined) {
-      await playAiPronunciation(button.dataset.aiPronounce, button);
     } else if (button.dataset.aiSpeak !== undefined) {
       playEnglish(button.dataset.aiSpeak, { rate: Number(button.dataset.rate) || 1, button });
     } else if (button.hasAttribute('data-song-import')) {
@@ -4300,7 +4276,6 @@ async function init() {
   renderBuildVersion();
   bindEvents();
   detectRestoreRecovery();
-  renderAiPronunciationSpeakerSetting();
   initSpeechSettings();
   renderTtsSettings();
   try {

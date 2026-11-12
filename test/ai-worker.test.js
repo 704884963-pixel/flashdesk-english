@@ -31,6 +31,11 @@ const lookupData = {
   forms: ['evaluations'],
 };
 const organizedLyricsData = { title: 'The Nights', artist: 'Avicii', lines: [{ english: 'Once upon a younger year', originalChinese: '在我还年轻的时候' }], ignored: ['评论 999+'], warnings: [] };
+const mixedLyricsFixture = [
+  'Test Song', 'Test Singer', 'Morning light is on the street', '清晨的阳光落在街上',
+  'I take my bag and catch the bus', '我背上包赶公交车', '00:18', 'Example Music Site',
+  'We talk about our plans for tonight', '我们谈论今晚的计划',
+].join('\n');
 const lyricExplanationData = { naturalChinese: '继续向前。', keyExpressions: ['move on'], structure: '祈使句' };
 const upstream = (content, status = 200, usage = { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 }) => async () => new Response(JSON.stringify(status === 200 ? { choices: [{ message: { content, reasoning_content: 'private reasoning' } }], usage } : { secret: 'do not expose' }), { status, headers: { 'Content-Type': 'application/json' } });
 const geminiUpstream = (content, status = 200, usage = { promptTokenCount: 13, candidatesTokenCount: 9, totalTokenCount: 22 }) => async () => new Response(JSON.stringify(status === 200 ? { candidates: [{ content: { parts: [{ text: content }] }, finishReason: 'STOP' }], usageMetadata: usage } : { error: { message: 'private upstream error' } }), { status, headers: { 'Content-Type': 'application/json' } });
@@ -98,6 +103,32 @@ test('organize_lyrics validates a strict editable preview without rewriting fiel
   assert.deepEqual(validateAiData('organize_lyrics', organizedLyricsData), organizedLyricsData);
   assert.deepEqual(validateClientRequest({ task: 'organize_lyrics', context: { rawLyrics: '  pasted lyrics  ' }, options: {} }).context, { rawLyrics: 'pasted lyrics' });
 });
+test('organized lyrics accept empty title artist translations and note lists without repair', async () => {
+  const { validateAiData, handleRequest } = { ...(await load('validation.js')), ...(await load('index.js')) };
+  const valid = {
+    title: '', artist: '',
+    lines: [
+      { english: 'Morning light is on the street', originalChinese: '清晨的阳光落在街上' },
+      { english: 'I take my bag and catch the bus' },
+      { english: 'We talk about our plans for tonight', originalChinese: '我们谈论今晚的计划' },
+    ],
+    ignored: ['00:18', 'Example Music Site'], warnings: [],
+  };
+  const normalized = validateAiData('organize_lyrics', valid);
+  assert.equal(normalized.lines.length, 3);
+  assert.equal(normalized.lines[1].originalChinese, '');
+  assert.deepEqual(normalized.ignored, ['00:18', 'Example Music Site']);
+  let calls = 0;
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: mixedLyricsFixture }), env, async () => {
+    calls += 1;
+    return (await upstream(JSON.stringify(valid)))();
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+  const body = await response.json();
+  assert.equal(body.attemptCount, 1);
+  assert.equal(body.data.lines.length, 3);
+});
 test('explain_lyric validates concise structured learning help', async () => {
   const { validateAiData, validateClientRequest } = await load('validation.js');
   assert.deepEqual(validateAiData('explain_lyric', lyricExplanationData), lyricExplanationData);
@@ -108,6 +139,9 @@ test('lyrics prompt only organizes supplied text and forbids retrieval or rewrit
   const prompt = organizeLyricsMessages({ rawLyrics: 'User supplied line' })[0].content;
   assert.match(prompt, /Never search for, recall, or complete missing lyrics/);
   assert.match(prompt, /Preserve every English lyric line exactly as supplied/);
+  assert.match(prompt, /do not explain meaning, analyze grammar, or add commentary/);
+  assert.match(prompt, /Do not translate missing Chinese/);
+  assert.match(prompt, /no Markdown or extra prose/);
   assert.match(prompt, /strict JSON/);
 });
 test('organized lyrics return through the existing provider-neutral Worker route', async () => {
@@ -188,6 +222,13 @@ test('Sentence and Article generation use AI_MODEL while lookup keeps AI_LOOKUP_
 });
 test('lookup_word timeout is 15 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('lookup_word', env).timeoutMs, 15000); });
 test('english_helper uses lookup model with thinking off and a small output budget', async () => { const { generationOptions } = await load('index.js'); assert.deepEqual(generationOptions('english_helper', env), { model: 'glm-4.5-air', maxOutputTokens: 520, temperature: 0.1, reasoning: false, timeoutMs: 15000 }); });
+test('organize_lyrics uses the fast configured model with its own bounded deadline', async () => {
+  const { generationOptions } = await load('index.js');
+  assert.deepEqual(generationOptions('organize_lyrics', env), { model: 'glm-4.5-air', maxOutputTokens: 2400, temperature: 0.1, reasoning: false, timeoutMs: 60000 });
+  assert.equal(generationOptions('lookup_word', env).timeoutMs, 15000);
+  assert.equal(generationOptions('generate_sentences', env).timeoutMs, 45000);
+  assert.equal(generationOptions('generate_article', env).timeoutMs, 60000);
+});
 test('generate_sentences timeout is 45 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('generate_sentences', env).timeoutMs, 45000); });
 test('generate_article timeout is 60 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('generate_article', env).timeoutMs, 60000); });
 test('translate_article prefers AI_TRANSLATION_MODEL', async () => { const { generationOptions } = await load('index.js'); const options = generationOptions('translate_article', { ...env, AI_TRANSLATION_MODEL: 'translation-model' }); assert.equal(options.model, 'translation-model'); assert.equal(options.timeoutMs, 60000); });

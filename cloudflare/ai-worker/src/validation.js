@@ -1,6 +1,7 @@
 import { normalizeProvider } from './providers/index.js';
 
 export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper', 'organize_lyrics', 'explain_lyric']);
+const MAX_LYRICS_CHARS = 12000;
 
 export function stripJsonFence(value) {
   const text = String(value || '').trim();
@@ -60,9 +61,10 @@ export function validateAiData(task, data, context = {}) {
       || !Array.isArray(data.lines) || !data.lines.length
       || !Array.isArray(data.ignored) || !Array.isArray(data.warnings)) throw new Error('invalid organized lyrics');
     const lines = data.lines.map((line) => {
+      const originalChinese = line?.originalChinese === undefined ? '' : line.originalChinese;
       if (!line || typeof line !== 'object' || Array.isArray(line)
-        || !nonempty(line.english) || typeof line.originalChinese !== 'string') throw new Error('invalid lyric line');
-      return { english: line.english.trim(), originalChinese: line.originalChinese.trim() };
+        || !nonempty(line.english) || typeof originalChinese !== 'string') throw new Error('invalid lyric line');
+      return { english: line.english.trim(), originalChinese: originalChinese.trim() };
     });
     const stringList = (value) => value.map((item) => {
       if (typeof item !== 'string') throw new Error('invalid lyric notes');
@@ -141,7 +143,7 @@ export function validateClientRequest(body) {
     return { task: body.task, context: { query: body.context.query.trim() }, options: {}, provider };
   }
   if (body.task === 'organize_lyrics') {
-    if (!nonempty(body.context.rawLyrics) || body.context.rawLyrics.length > 40000) throw new Error('invalid lyrics context');
+    if (!nonempty(body.context.rawLyrics) || body.context.rawLyrics.length > MAX_LYRICS_CHARS) throw new Error('invalid lyrics context');
     return { task: body.task, context: { rawLyrics: body.context.rawLyrics.trim() }, options: {}, provider };
   }
   if (body.task === 'explain_lyric') {

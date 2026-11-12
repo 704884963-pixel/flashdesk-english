@@ -44,23 +44,13 @@ test('invalid stored AI pronunciation speaker safely falls back to asteria', () 
   assert.equal(harness.values.get('flashdesk-ai-pronunciation-speaker'), 'asteria');
 });
 
-test('Review speech settings own the only AI pronunciation speaker selector', () => {
+test('AI pronunciation speaker selector is removed from every user-facing setting', () => {
   const aiService = appSource.slice(appSource.indexOf('function aiSettingsHtml'), appSource.indexOf('function aiServiceStatusHtml'));
   assert.doesNotMatch(aiService, /AI发音声音|ai-pronunciation-speaker|AI_PRONUNCIATION_SPEAKERS/);
-  assert.equal((indexSource.match(/id="ai-pronunciation-speaker"/g) || []).length, 1);
-  assert.ok(indexSource.indexOf('id="tts-status"') < indexSource.indexOf('id="ai-pronunciation-speaker"'));
-  assert.ok(indexSource.indexOf('id="ai-pronunciation-speaker"') < indexSource.indexOf('本地发音缓存'));
-  assert.match(appSource, /function renderAiPronunciationSpeakerSetting[\s\S]*AI_PRONUNCIATION_SPEAKERS\.map/);
-  assert.match(appSource, /Object\.freeze\(\['asteria', 'orion', 'luna'\]\)/);
-});
-
-test('Review speaker change persists immediately without the AI settings save action', () => {
+  assert.doesNotMatch(indexSource, /ai-pronunciation-speaker|更多声音|Aura-1/);
   const bindEvents = appSource.slice(appSource.indexOf('function bindEvents'), appSource.indexOf('/* ---------- init ---------- */'));
-  const changeHandler = bindEvents.slice(bindEvents.indexOf("$('#ai-pronunciation-speaker').addEventListener('change'"));
-  assert.match(changeHandler, /aiPronunciationSpeaker = saveAiPronunciationSpeaker\(e\.target\.value\)/);
-  assert.ok(changeHandler.indexOf('saveAiPronunciationSpeaker') < changeHandler.indexOf("$('#tts-save')"));
-  const aiRootChange = bindEvents.slice(bindEvents.indexOf("$('#ai-root').addEventListener('change'"), bindEvents.indexOf("$('#ai-root').addEventListener('click'"));
-  assert.doesNotMatch(aiRootChange, /ai-pronunciation-speaker|saveAiPronunciationSpeaker/);
+  assert.doesNotMatch(bindEvents, /ai-pronunciation-speaker|data-ai-pronounce|data-review-ai-pronounce/);
+  assert.match(appSource, /Object\.freeze\(\['asteria', 'orion', 'luna'\]\)/);
 });
 
 test('AI pronunciation request sends the selected speaker without entering its audio cache', () => {
@@ -69,8 +59,8 @@ test('AI pronunciation request sends the selected speaker without entering its a
   assert.doesNotMatch(section, /audioCacheApi|ttsAudioCache|FlashAudioCache|indexedDB/);
 });
 
-test('AI speaker setting is device-local, backup-independent, and mobile-safe', () => {
+test('retained Aura implementation stays device-local and backup-independent without UI CSS', () => {
   assert.doesNotMatch(settingsSource, /FlashStore|cards|history|backup/);
   assert.match(stylesSource, /\.speech-settings select\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
-  assert.match(stylesSource, /\.ai-pronunciation-settings-block[\s\S]*display:\s*grid/);
+  assert.doesNotMatch(stylesSource, /\.ai-pronunciation-settings-block|\.word-ai-pronounce/);
 });
