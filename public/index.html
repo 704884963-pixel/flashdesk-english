@@ -12,21 +12,34 @@
     <span>新版本已准备好</span>
     <button type="button" class="btn btn-primary" id="pwa-update-now">立即更新</button>
   </aside>
-  <div class="app">
-    <header class="header">
+  <div class="app app-shell">
+    <header class="header page-header">
       <div class="wordmark">
-        <h1>Flash<span class="accent">Desk</span></h1>
-        <div class="micro-label">间隔复习</div>
+        <div class="app-brand">Flash<span class="accent">Desk</span></div>
+        <h1 id="page-title">今日复习</h1>
+        <p id="page-context">专注今天需要记住的内容</p>
       </div>
     </header>
-    <div class="nav-sticky">
-      <nav class="nav" aria-label="主导航">
-        <button type="button" class="btn tab" data-view="review">复习</button>
-        <button type="button" class="btn tab" data-view="words">单词库</button>
-        <button type="button" class="btn tab" data-view="ai">AI学习</button>
+    <div class="nav-sticky bottom-nav-shell">
+      <nav class="nav" aria-label="底部主导航">
+        <button type="button" class="btn tab" data-view="review">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4h6M9 12h6M9 16h4"/></svg>
+          <span class="nav-label">复习</span>
+        </button>
+        <button type="button" class="btn tab" data-view="words">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5v-16Zm16 0A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5v-16Z"/></svg>
+          <span class="nav-label">单词库</span>
+        </button>
+        <button type="button" class="btn tab" data-view="ai">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.15 3.85L17 8l-3.85 1.15L12 13l-1.15-3.85L7 8l3.85-1.15L12 3Zm6 10 .75 2.25L21 16l-2.25.75L18 19l-.75-2.25L15 16l2.25-.75L18 13ZM6 14l.9 2.6L9.5 17.5l-2.6.9L6 21l-.9-2.6-2.6-.9 2.6-.9L6 14Z"/></svg>
+          <span class="nav-label">AI学习</span>
+        </button>
         <div class="nav-more">
           <button type="button" class="btn nav-more-toggle" id="nav-more-toggle"
-            aria-label="更多功能" aria-haspopup="menu" aria-expanded="false">…</button>
+            aria-label="更多功能" aria-haspopup="menu" aria-expanded="false">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>
+            <span class="nav-label">更多</span>
+          </button>
           <div class="nav-more-menu" id="nav-more-menu" role="menu" hidden>
             <button type="button" class="tab nav-more-item nav-more-reading" data-view="reading" role="menuitem">阅读</button>
             <div class="nav-more-separator" role="separator"></div>
@@ -42,7 +55,7 @@
       </nav>
     </div>
 
-    <section id="view-review" hidden>
+    <section id="view-review" class="page-content" hidden>
       <div class="review-top">
         <div class="micro-label" id="due-count"></div>
         <label class="deck-filter review-deck-filter">
@@ -122,11 +135,11 @@
       </details>
     </section>
 
-    <section id="view-quiz" hidden>
+    <section id="view-quiz" class="page-content" hidden>
       <div id="quiz-area"></div>
     </section>
 
-    <section id="view-add" hidden>
+    <section id="view-add" class="page-content" hidden>
       <div class="add-mode-switch" aria-label="新增方式">
         <button type="button" class="btn add-mode active" data-add-mode="single" aria-pressed="true">单条新增</button>
         <button type="button" class="btn add-mode" data-add-mode="batch" aria-pressed="false">批量导入</button>
@@ -202,19 +215,19 @@ back: 智能体接收查询。</pre>
       </section>
     </section>
 
-    <section id="view-words" hidden>
+    <section id="view-words" class="page-content" hidden>
       <div id="word-library"></div>
     </section>
 
-    <section id="view-reading" hidden>
+    <section id="view-reading" class="page-content" hidden>
       <div id="article-root"></div>
     </section>
 
-    <section id="view-ai" hidden>
+    <section id="view-ai" class="page-content" hidden>
       <div id="ai-root"></div>
     </section>
 
-    <section id="view-usage" hidden>
+    <section id="view-usage" class="page-content" hidden>
       <div class="usage-page">
         <header class="usage-head">
           <h2>学习统计</h2>
@@ -278,7 +291,7 @@ back: 智能体接收查询。</pre>
       </div>
     </section>
 
-    <section id="view-backup" hidden>
+    <section id="view-backup" class="page-content" hidden>
       <div class="backup-page">
         <header class="backup-head">
           <h2>FlashDesk 数据备份</h2>
@@ -302,7 +315,7 @@ back: 智能体接收查询。</pre>
       </div>
     </section>
 
-    <section id="view-browse" hidden>
+    <section id="view-browse" class="page-content" hidden>
       <div class="browse-toolbar">
         <div class="browse-toolbar-main">
           <div class="micro-label" id="browse-count"></div>

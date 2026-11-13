@@ -13,10 +13,10 @@ const menu = html.slice(html.indexOf('<div class="nav-more-menu"'), html.indexOf
 test('primary navigation exposes only Review, Word Library, AI learning and More', () => {
   const beforeMenu = nav.slice(0, nav.indexOf('<div class="nav-more">'));
   assert.deepEqual([...beforeMenu.matchAll(/data-view="([^"]+)"/g)].map((match) => match[1]), ['review', 'words', 'ai']);
-  assert.match(beforeMenu, />复习<\/button>/);
-  assert.match(beforeMenu, />单词库<\/button>/);
-  assert.match(beforeMenu, />AI学习<\/button>/);
-  assert.match(nav, /id="nav-more-toggle"[\s\S]*?>…<\/button>/);
+  assert.match(beforeMenu, />复习<\/span>/);
+  assert.match(beforeMenu, />单词库<\/span>/);
+  assert.match(beforeMenu, />AI学习<\/span>/);
+  assert.match(nav, /id="nav-more-toggle"[\s\S]*?<span class="nav-label">更多<\/span>/);
 });
 
 test('low-frequency views no longer stay in the primary navigation row', () => {
@@ -75,11 +75,31 @@ test('Review grade actions keep Again, Remember and Easy order and handlers', ()
   assert.match(app, /b\.id === 'grade-easy'\) grade\('easy'\)/);
 });
 
-test('mobile navigation is one compact non-wrapping grid and the More menu is layered', () => {
+test('mobile navigation is a fixed safe-area bottom bar and the More menu opens above it', () => {
   assert.match(css, /\.nav \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns:/);
-  assert.match(css, /\.nav-sticky \{[\s\S]*?position: sticky;[\s\S]*?z-index: 30/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.nav \{[^}]*grid-template-columns:[^}]*48px/);
-  assert.match(css, /\.nav-more-menu \{[\s\S]*?position: absolute;[\s\S]*?z-index: 40/);
+  assert.match(css, /\.nav-sticky \{[\s\S]*?position: fixed;[\s\S]*?bottom: 0;[\s\S]*?z-index: 50/);
+  assert.match(css, /\.nav-sticky \{[\s\S]*?env\(safe-area-inset-bottom\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.nav \{[^}]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.nav-more-menu \{[\s\S]*?position: absolute;[\s\S]*?bottom: calc\(100% \+ 10px\);[\s\S]*?z-index: 60/);
+});
+
+test('app shell exposes a dynamic page header and semantic icon-plus-label navigation', () => {
+  assert.match(html, /class="app app-shell"/);
+  assert.match(html, /class="header page-header"/);
+  assert.match(html, /id="page-title"/);
+  assert.match(html, /id="page-context"/);
+  assert.equal((nav.match(/class="nav-icon"/g) || []).length, 4);
+  assert.equal((nav.match(/class="nav-label"/g) || []).length, 4);
+  assert.match(app, /const VIEW_META = Object\.freeze/);
+  assert.match(app, /updatePageHeader\(name\)/);
+});
+
+test('UI 2.0 design tokens define consistent roles, radii and spacing', () => {
+  for (const token of ['--bg', '--surface', '--surface-elevated', '--surface-soft', '--text-primary',
+    '--text-secondary', '--text-muted', '--accent-soft', '--danger', '--success', '--border-subtle',
+    '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--space-1', '--space-8']) {
+    assert.match(css, new RegExp(`${token}:`));
+  }
 });
 
 test('Review grading keeps distinct danger, primary success and secondary accent styles', () => {

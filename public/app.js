@@ -257,14 +257,17 @@ async function saveNewCard(fields) {
 
 function wordBackHtml(card) {
   const details = wordDetails(card);
-  const section = (label, value) => value
-    ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
+  const section = (label, value, extraClass = '') => value
+    ? `<div class="word-detail${extraClass ? ` ${extraClass}` : ''}"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   return `<div class="word-back">
-    ${details.wordNumber === null ? '' : `<div class="micro-label">#${details.wordNumber}</div>`}
-    ${section('🧠 发音拆解', details.memoryReading)}
-    ${section('🗣 中文近似', details.chineseReading)}
-    ${section('🇨🇳 中文意思', card.back)}
-    ${section('词形变化', details.forms.join(' / '))}
+    <div class="word-back-head">
+      ${details.wordNumber === null ? '' : `<div class="micro-label">#${details.wordNumber}</div>`}
+      <div class="card-front word-back-front">${esc(card.front)}</div>
+    </div>
+    ${section('🧠 发音拆解', details.memoryReading, 'word-detail-reading')}
+    ${section('🗣 中文近似', details.chineseReading, 'word-detail-reading')}
+    ${section('🇨🇳 中文意思', card.back, 'word-detail-meaning-block')}
+    ${section('词形变化', details.forms.join(' / '), 'word-detail-forms')}
   </div>`;
 }
 
@@ -1128,8 +1131,15 @@ function renderReview() {
   const frontHtml = sentence ? sentenceFrontHtml(card.front) : esc(card.front);
   const normalLabel = sentence ? '🔊 标准发音' : '🔊 标准发音';
   const slowLabel = sentence ? '🐢 慢速整句' : '🐢 慢速';
+  const totalSession = Math.max(1, s.correct + s.queue.length);
+  const currentStep = Math.min(totalSession, s.correct + s.pos + 1);
+  const progressPct = Math.min(100, Math.max(12, Math.round((currentStep / totalSession) * 100)));
   area.innerHTML = `
     <div class="review-stage">
+      <div class="review-step-badge" aria-label="今日进度 ${currentStep} / ${totalSession}">
+        <span class="review-step-count">${currentStep} / ${totalSession}</span>
+        <span class="review-step-track" aria-hidden="true"><span class="review-step-fill" style="width:${progressPct}%"></span></span>
+      </div>
       <button class="card-arrow" id="card-prev" title="上一张（←）" aria-label="上一张" ${arrowsOff}>‹</button>
       <div class="card-slot">
         <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
@@ -1596,9 +1606,9 @@ function wordSpeechButtons(card) {
   const id = esc(card.id);
   return `<div class="word-speech-actions">
     <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="1"
-      aria-label="标准发音 ${esc(card.front)}">🔊 标准发音</button>
+      aria-label="标准发音 ${esc(card.front)}">发音</button>
     <button type="button" class="speak-front" data-word-speak="${id}" data-speak-rate="0.75"
-      aria-label="慢速朗读 ${esc(card.front)}">🐢 慢速</button>
+      aria-label="慢速朗读 ${esc(card.front)}">慢速</button>
   </div>`;
 }
 
@@ -1609,7 +1619,7 @@ function wordListItemHtml(card, now = Date.now()) {
   const lapses = Number(card.lapses || 0);
   return `<article class="word-list-item" data-word-card="${esc(card.id)}">
     <button type="button" class="word-list-main" data-word-open="${esc(card.id)}">
-      <span class="word-list-heading"><span class="word-number">${number}</span><strong title="${esc(card.front)}">${esc(card.front)}</strong></span>
+      <span class="word-list-heading"><strong title="${esc(card.front)}">${esc(card.front)}</strong><span class="word-number">${number}</span></span>
       <span class="word-list-meaning">${esc(card.back)}</span>
       <span class="word-list-meta">
         <span class="word-list-meta-main">${details.forms.length ? `<span class="word-list-forms">${esc(details.forms.join(' · '))}</span><span aria-hidden="true"> · </span>` : ''}<span class="word-status word-status-${status.key}">● ${status.label}</span></span>
@@ -1665,11 +1675,13 @@ function renderWordLibrary() {
   const selected = state.wordLibrary.selectedId
     ? state.cards.find((card) => card.id === state.wordLibrary.selectedId && card.deck === 'Words')
     : null;
+  syncShellHeaderState();
   if (selected) {
     root.innerHTML = wordDetailHtml(selected);
     return;
   }
   state.wordLibrary.selectedId = null;
+  syncShellHeaderState();
   const stats = wordLibraryStats(state.cards);
   const cards = wordLibraryCards(state.cards, state.wordLibrary);
   const summary = state.wordLibrary.query
@@ -1679,7 +1691,6 @@ function renderWordLibrary() {
       : `${WORD_LIBRARY_LABELS[state.wordLibrary.filter]} · ${cards.length} 个单词`;
   root.innerHTML = `<div class="word-library-home">
     <header class="word-library-header">
-      <h2>单词库</h2>
       <div class="word-library-summary">${esc(summary)}</div>
     </header>
     <div class="word-library-tools">
@@ -2274,14 +2285,23 @@ function refreshAiServiceStatus() {
 }
 
 function renderAiHome() {
+  syncShellHeaderState();
   const drafts = [...state.ai.drafts].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
   const draftHtml = drafts.length ? `<section class="panel ai-draft-inbox"><h3>未保存生成内容</h3>${drafts.map((draft) => `<div class="ai-draft-row"><button type="button" class="btn" data-ai-open-draft="${esc(draft.id)}">${draft.type === 'article' ? '短文' : '长句'} · ${esc(draft.type === 'article' ? draft.data.title : draft.data.sentences?.[0]?.english || '生成内容')}</button><button type="button" class="btn btn-danger" data-ai-delete-draft="${esc(draft.id)}">删除草稿</button></div>`).join('')}</section>` : '';
-  $('#ai-root').innerHTML = `<div class="ai-page">
-    <header class="ai-head"><div><h2>AI 个性化学习</h2><p>AI 只生成候选内容，保存始终由你确认。</p></div></header>
+  $('#ai-root').innerHTML = `<div class="ai-page ai-home-page">
     <div class="ai-home-actions">
-      <button type="button" class="panel ai-entry" data-ai-mode="helper"><strong>AI 英语助手</strong><span>查单词、简单例句、歌曲学习和自由提问</span></button>
-      <button type="button" class="panel ai-entry" data-ai-mode="sentences"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></button>
-      <button type="button" class="panel ai-entry" data-ai-mode="article"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></button>
+      <button type="button" class="panel ai-entry ai-entry-primary" data-ai-mode="helper">
+        <span class="ai-entry-icon ai-entry-icon-helper" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 1.4 4.3L18 8.7l-4.6 1.4L12 14.5l-1.4-4.4L6 8.7l4.6-1.4L12 3Zm6 11 .8 2.4L21 17.2l-2.2.8L18 20.4l-.8-2.4-2.2-.8 2.2-.8L18 14ZM6.5 14.5l.9 2.5 2.5.9-2.5.9-.9 2.5-.9-2.5-2.5-.9 2.5-.9.9-2.5Z"/></svg></span>
+        <span class="ai-entry-copy"><strong>AI 英语助手</strong><span>查单词、简单例句、歌曲学习和自由提问</span></span>
+      </button>
+      <button type="button" class="panel ai-entry" data-ai-mode="sentences">
+        <span class="ai-entry-icon ai-entry-icon-sentences" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9"/></svg></span>
+        <span class="ai-entry-copy"><strong>今日长句</strong><span>用新词、易错词和久未练习词生成自然长句</span></span>
+      </button>
+      <button type="button" class="panel ai-entry" data-ai-mode="article">
+        <span class="ai-entry-icon ai-entry-icon-article" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm3 5h6m-6 4h6m-6 4h4"/></svg></span>
+        <span class="ai-entry-copy"><strong>今日短文</strong><span>生成约 200～300 words 的个性化阅读材料</span></span>
+      </button>
     </div>${draftHtml}${aiSettingsHtml()}</div>`;
 }
 
@@ -2316,8 +2336,8 @@ function helperLookupHtml(entry) {
   const resolution = aiLookupExistingResolution(clickedWord, result);
   const card = resolution.card || null;
   const ambiguous = resolution.status === 'ambiguous';
-  const details = (label, value) => value
-    ? `<div class="word-detail"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
+  const details = (label, value, extraClass = '') => value
+    ? `<div class="word-detail${extraClass ? ` ${extraClass}` : ''}"><span class="micro-label">${label}</span><div>${esc(value)}</div></div>` : '';
   const senses = Array.isArray(result.senses) ? result.senses.slice(0, 4) : [];
   const number = card && Number.isSafeInteger(card.wordNumber) ? ` #${card.wordNumber}` : '';
   const normalizedClicked = FlashArticleUtils.wordKey(clickedWord);
@@ -2325,14 +2345,17 @@ function helperLookupHtml(entry) {
   const existing = card ? `<div class="ai-helper-existing">
     ${normalizedClicked && normalizedClicked !== normalizedCard ? `<div>${esc(clickedWord)} → ${esc(card.front)}</div><strong>✓ 原形 ${esc(card.front)} 已在词库${number}</strong>` : `<strong>✓ 已在词库${number}</strong>`}
   </div>` : ambiguous ? wordMatchCandidatesHtml(resolution, clickedWord, '', false, 'data-ai-helper-word-candidate') : '';
+  const coreMeaning = result.coreMeaningZh || result.meaningZh;
+  const phonetics = [result.memoryReading, result.chineseReading].filter(Boolean);
   return `<article class="ai-helper-lookup" aria-live="polite">
-    <header class="ai-helper-word-head"><h3>${esc(baseForm)}</h3>${result.pos ? `<span>${esc(result.pos)}</span>` : ''}</header>
-    ${details('核心义', result.coreMeaningZh || result.meaningZh)}
-    ${senses.length ? `<div class="word-detail"><span class="micro-label">常见义</span><ol class="ai-helper-senses">${senses.map((sense) => `<li><div><strong>${esc(sense.meaningZh)}</strong>${sense.pos ? `<span>${esc(sense.pos)}</span>` : ''}</div>${sense.example ? `<p>${esc(sense.example)}</p>` : ''}</li>`).join('')}</ol></div>` : ''}
-    ${details('本句含义', result.meaningInContextZh)}
-    ${details('🧠 发音拆解', result.memoryReading)}
-    ${details('🗣 中文近似', result.chineseReading)}
-    ${existing}
+    <header class="ai-helper-word-head">
+      <div class="ai-helper-word-title"><h3>${esc(baseForm)}</h3>${result.pos ? `<span class="ai-helper-pos">${esc(result.pos)}</span>` : ''}</div>
+      ${coreMeaning ? `<p class="ai-helper-core-meaning">${esc(coreMeaning)}</p>` : ''}
+      ${phonetics.length ? `<p class="ai-helper-phonetics">${esc(phonetics.join(' · '))}</p>` : ''}
+    </header>
+    ${senses.length ? `<ol class="ai-helper-senses">${senses.map((sense) => `<li><div><strong>${esc(sense.meaningZh)}</strong>${sense.pos ? `<span>${esc(sense.pos)}</span>` : ''}</div>${sense.example ? `<p>${esc(sense.example)}</p>` : ''}</li>`).join('')}</ol>` : ''}
+    ${details('本句含义', result.meaningInContextZh, 'ai-helper-context-detail')}
+    ${ existing }
     <div class="form-actions"><button type="button" class="btn" data-ai-speak="${esc(clickedWord)}" data-rate="1">🔊 发音</button>
       ${card || ambiguous ? '' : `<button type="button" class="btn btn-primary" data-ai-helper-add-word="${esc(clickedWord)}">加入词库</button>`}
     </div>
@@ -2340,10 +2363,10 @@ function helperLookupHtml(entry) {
 }
 
 function renderAiHelper() {
-  $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><button class="article-back" type="button" data-ai-home>← 返回</button>
-    <header class="ai-head"><h2>AI 英语助手</h2><p>一次问一个英语问题，回答不会写入学习数据。</p></header>
+  syncShellHeaderState();
+  $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><div class="subview-bar"><button class="article-back" type="button" data-ai-home>← AI 学习</button><h2 class="subview-title">AI 英语助手</h2></div>
     <section class="panel ai-helper-panel">
-      <label class="field"><span class="micro-label">你的问题</span><textarea id="ai-helper-query" rows="4" placeholder="例如：customer 和 client 有什么区别？">${esc(state.ai.helperQuery)}</textarea></label>
+      <label class="field"><span class="micro-label">输入单词、句子或问题</span><textarea id="ai-helper-query" rows="3" placeholder="输入单词、句子或英语问题…">${esc(state.ai.helperQuery)}</textarea></label>
       <div class="ai-helper-quick" aria-label="快捷问题">
         <button type="button" class="btn" data-ai-helper-action="lookup" ${state.ai.helperLoading ? 'disabled' : ''}>查单词</button>
         <button type="button" class="btn" data-ai-helper-action="example" ${state.ai.helperLoading ? 'disabled' : ''}>简单例句</button>
@@ -2352,9 +2375,10 @@ function renderAiHelper() {
       </div>
       ${state.ai.helperError ? `<p class="ai-error">${esc(state.ai.helperError)}</p>` : ''}
       ${state.ai.helperRetry ? '<button type="button" class="btn" data-ai-helper-retry>重新尝试</button>' : ''}
-      ${state.ai.helperLookup ? helperLookupHtml(state.ai.helperLookup) : ''}
-      ${state.ai.helperAnswer ? `<div class="ai-helper-answer" aria-live="polite">${helperAnswerHtml(state.ai.helperAnswer)}</div>` : ''}
-    </section>${aiSettingsHtml()}</div>`;
+    </section>
+    ${state.ai.helperLookup ? helperLookupHtml(state.ai.helperLookup) : ''}
+    ${state.ai.helperAnswer ? `<div class="ai-helper-answer" aria-live="polite">${helperAnswerHtml(state.ai.helperAnswer)}</div>` : ''}
+    ${aiSettingsHtml()}</div>`;
 }
 
 async function askEnglishHelper() {
@@ -2436,6 +2460,7 @@ function currentSong() {
 }
 
 function renderSongLibrary() {
+  syncShellHeaderState();
   const songs = [...state.ai.songs].sort((a, b) => Number(b.lastStudiedAt || b.updatedAt) - Number(a.lastStudiedAt || a.updatedAt));
   $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-ai-mode="helper">← 返回英语助手</button>
     <header class="ai-head"><div><h2>歌曲学习</h2><p>保存你自己粘贴的歌词，整首回看；挑选单词和好句进入现有复习系统。</p></div><button type="button" class="btn btn-primary" data-song-import>导入新歌词</button></header>
@@ -2446,6 +2471,7 @@ function renderSongLibrary() {
 }
 
 function renderSongImport() {
+  syncShellHeaderState();
   $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
     <header class="ai-head"><h2>导入新歌词</h2><p>只整理你粘贴的内容，不会联网补全歌词。</p></header>
     <section class="panel song-import-panel"><label class="field"><span class="micro-label">原始歌词</span><textarea id="song-raw-lyrics" rows="16" placeholder="把歌词直接粘贴到这里。可以包含英文、中文和其它杂乱内容。">${esc(state.ai.song.rawLyrics)}</textarea></label>
@@ -2461,6 +2487,7 @@ function songPreviewLineHtml(line, index) {
 }
 
 function renderSongPreview() {
+  syncShellHeaderState();
   const preview = state.ai.song.preview;
   if (!preview) return renderSongImport();
   $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-import>← 返回原始歌词</button>
@@ -2481,12 +2508,13 @@ function songExplanationHtml(explanation) {
 function renderSongDetail() {
   const song = currentSong();
   if (!song) { state.ai.song.mode = 'library'; return renderSongLibrary(); }
+  syncShellHeaderState();
   $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
-    <header class="ai-head"><div><h2>${esc(song.title)}</h2>${song.artist ? `<p>${esc(song.artist)}</p>` : ''}</div></header>
-    <div class="song-lines">${song.lines.map((line, index) => `<article class="panel song-line-card" data-song-line-id="${esc(line.id)}"><div class="song-line-head"><span class="micro-label">第 ${index + 1} 句</span>${line.learned ? '<span class="song-learned">✓ 已学习</span>' : ''}</div><p class="song-english">${esc(line.english)}</p>
-      ${line.originalChinese ? `<div class="song-original-translation"><div class="micro-label">原翻译</div><p>${esc(line.originalChinese)}</p></div>` : ''}${songExplanationHtml(line.aiExplanation)}
-      <div class="song-line-actions"><button type="button" class="btn" data-song-explain="${esc(line.id)}" ${state.ai.song.explainingLineId === line.id ? 'disabled' : ''}>${state.ai.song.explainingLineId === line.id ? '正在解释…' : line.aiExplanation ? '重新解释' : 'AI解释'}</button><button type="button" class="btn" data-song-speak="${esc(line.id)}">🔊 发音</button><button type="button" class="btn" data-song-add-sentence="${esc(line.id)}">加入长句</button><button type="button" class="btn" data-song-learned="${esc(line.id)}">${line.learned ? '取消已学习' : '标记已学习'}</button></div>
-      <form class="song-word-form" data-song-word-form="${esc(line.id)}"><input aria-label="查歌词单词" placeholder="输入这句中想学的单词"><button type="submit" class="btn">查单词</button></form></article>`).join('')}</div>
+    <header class="ai-head song-detail-head"><div><h2>${esc(song.title)}</h2>${song.artist ? `<p>${esc(song.artist)}</p>` : ''}</div></header>
+    <div class="song-lines">${song.lines.map((line, index) => `<article class="panel song-line-card${line.learned ? ' is-learned' : ''}" data-song-line-id="${esc(line.id)}"><div class="song-line-head"><span class="micro-label song-line-index">${String(index + 1).padStart(2, '0')}</span><button type="button" class="song-learned-badge${line.learned ? ' song-learned' : ''}" data-song-learned="${esc(line.id)}">${line.learned ? '✓ 已学习' : '○ 学会'}</button></div><p class="song-english">${esc(line.english)}</p>
+      ${line.originalChinese ? `<div class="song-original-translation"><p>${esc(line.originalChinese)}</p></div>` : ''}${songExplanationHtml(line.aiExplanation)}
+      <div class="song-line-footer"><div class="song-line-actions"><button type="button" class="btn" data-song-speak="${esc(line.id)}">发音</button><button type="button" class="btn" data-song-explain="${esc(line.id)}" ${state.ai.song.explainingLineId === line.id ? 'disabled' : ''}>${state.ai.song.explainingLineId === line.id ? '正在解释…' : line.aiExplanation ? '重新解释' : 'AI解释'}</button><button type="button" class="btn" data-song-add-sentence="${esc(line.id)}">加入长句</button></div>
+      <details class="song-word-disclosure"><summary class="btn song-word-summary">查单词</summary><form class="song-word-form" data-song-word-form="${esc(line.id)}"><input aria-label="查歌词单词" placeholder="输入这句中想学的单词"><button type="submit" class="btn btn-primary">查单词</button></form></details></div></article>`).join('')}</div>
     ${state.ai.song.error ? `<p class="ai-error">${esc(state.ai.song.error)}</p>` : ''}</div>`;
 }
 
@@ -2560,6 +2588,7 @@ async function explainSongLine(lineId) {
 }
 
 function renderAiSentences() {
+  syncShellHeaderState();
   const preview = state.ai.preview?.type === 'sentences' ? state.ai.preview : null;
   const lookup = FlashArticleUtils.buildWordLookup(state.cards);
   const sentence = preview?.data.sentences[0] || null;
@@ -2580,6 +2609,7 @@ function renderAiSentences() {
 }
 
 function renderAiArticle() {
+  syncShellHeaderState();
   const preview = state.ai.preview?.type === 'article' ? state.ai.preview : null;
   const words = preview ? FlashArticleUtils.wordTokens(preview.data.content).length : 0;
   const lookup = FlashArticleUtils.buildWordLookup(state.cards);
@@ -2705,6 +2735,7 @@ function sortedArticles() {
 }
 
 function renderArticleHome() {
+  syncShellHeaderState();
   const root = $('#article-root');
   if (state.article.error) {
     root.innerHTML = `<div class="article-page-head"><div><h2>阅读</h2></div></div>
@@ -2742,6 +2773,7 @@ function renderArticleHome() {
 }
 
 function renderArticleAdd() {
+  syncShellHeaderState();
   $('#article-root').innerHTML = `<div class="article-page-head">
       <div><button type="button" class="article-back" data-article-list>← 返回</button><h2>添加文章</h2></div>
     </div>
@@ -2806,6 +2838,7 @@ function articleParagraphRowHtml(paragraph, paragraphIndex, lookup, translations
 function renderArticleReader() {
   const article = state.article.current;
   if (!article) return renderArticleHome();
+  if (typeof syncShellHeaderState === 'function') syncShellHeaderState();
   const sourceUrl = FlashArticleUtils.safeExternalUrl(article.sourceUrl);
   const metrics = articleMetrics(article);
   state.article.parsed = metrics.analysis;
@@ -3475,6 +3508,36 @@ function renderUsageView() {
 
 const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse', 'usage', 'backup']);
 
+const VIEW_META = Object.freeze({
+  review: ['今日复习', '专注今天需要记住的内容'],
+  words: ['单词库', '整理和复习你的词汇'],
+  ai: ['AI 学习', '用真实语境练习英语'],
+  reading: ['阅读', '在上下文中理解和积累词汇'],
+  add: ['新增内容', '添加单词、长句或批量导入'],
+  quiz: ['检测', '用小测验检查当前掌握情况'],
+  browse: ['浏览卡片', '查看并管理全部学习内容'],
+  usage: ['学习统计', '了解持续投入，而不是追求数字'],
+  backup: ['数据备份', '安全保存和恢复学习记录'],
+});
+
+function syncShellHeaderState() {
+  if (typeof document === 'undefined' || !document.body || !document.body.classList) return;
+  const inSubView =
+    (state.view === 'ai' && state.ai.mode !== 'home') ||
+    (state.view === 'words' && Boolean(state.wordLibrary.selectedId)) ||
+    (state.view === 'reading' && state.article.mode !== 'list');
+  document.body.classList.toggle('in-subview', inSubView);
+}
+
+function updatePageHeader(name) {
+  const [title, context] = VIEW_META[name] || ['FlashDesk', '专注、清晰地学习英语'];
+  const titleNode = $('#page-title');
+  const contextNode = $('#page-context');
+  if (titleNode) titleNode.textContent = title;
+  if (contextNode) contextNode.textContent = context;
+  syncShellHeaderState();
+}
+
 function setMoreMenuOpen(open) {
   const toggle = $('#nav-more-toggle');
   const menu = $('#nav-more-menu');
@@ -3507,6 +3570,7 @@ function switchView(name) {
   setMoreMenuOpen(false);
   document.body.classList.toggle('reading-view', name === 'reading');
   updateNavigationState(name);
+  updatePageHeader(name);
   for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'usage', 'backup']) $(`#view-${v}`).hidden = v !== name;
   usageTracker.setArea(usageAreaForView(name));
   if (name === 'review') {
@@ -4078,6 +4142,18 @@ function bindEvents() {
         }
         await openArticle(article.id);
       } catch (err) { state.ai.error = `保存失败：${err.message}`; button.disabled = false; renderAiArticle(); }
+    }
+  });
+
+  $('#ai-root').addEventListener('toggle', (e) => {
+    const details = e.target.closest('.song-word-disclosure');
+    if (details?.open) details.querySelector('input')?.focus();
+  }, true);
+
+  $('#ai-root').addEventListener('input', (e) => {
+    if (e.target.id === 'ai-helper-query') {
+      e.target.style.height = 'auto';
+      e.target.style.height = `${Math.max(94, e.target.scrollHeight)}px`;
     }
   });
 
