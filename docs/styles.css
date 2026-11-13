@@ -2115,7 +2115,7 @@ select::placeholder, input::placeholder, textarea::placeholder {
 }
 .review-step-badge {
   position: absolute;
-  top: 17px;
+  top: 23px;
   left: 20px;
   z-index: 3;
   display: inline-flex;
@@ -2154,18 +2154,52 @@ select::placeholder, input::placeholder, textarea::placeholder {
 }
 .card-arrow {
   position: absolute;
-  top: 13px;
+  top: 10px;
   z-index: 3;
-  width: 26px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
+  padding: 0 0 2px;
   border: 0;
-  background: var(--surface-soft);
+  border-radius: 999px;
+  background: transparent;
   color: var(--text-secondary);
-  font-size: 1rem;
-  opacity: .8;
+  font-size: 1.32rem;
+  font-weight: 450;
+  line-height: 1;
+  opacity: .92;
+  isolation: isolate;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
-#card-prev { right: 44px; left: auto; }
-#card-next { right: 14px; }
+.card-arrow::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  z-index: -1;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid rgba(23, 25, 30, 0.045);
+  transition: background-color .14s ease, border-color .14s ease, transform .1s ease;
+}
+#card-prev { right: 56px; left: auto; }
+#card-next { right: 10px; }
+.card-arrow:active:not(:disabled) {
+  color: var(--accent-strong);
+}
+.card-arrow:active:not(:disabled)::before {
+  background: var(--accent-soft);
+  border-color: rgba(14, 138, 157, 0.22);
+  transform: scale(0.93);
+}
+@media (hover: hover) {
+  .card-arrow:hover:not(:disabled) {
+    color: var(--text-primary);
+  }
+  .card-arrow:hover:not(:disabled)::before {
+    background: #E7E7E2;
+    border-color: rgba(23, 25, 30, 0.08);
+  }
+}
 .card-arrow:disabled { opacity: .24; pointer-events: none; }
 
 .card-face {
@@ -2177,9 +2211,12 @@ select::placeholder, input::placeholder, textarea::placeholder {
   box-shadow: var(--shadow-card);
 }
 .card-face.face-front {
-  padding-top: 32px;
+  padding-top: 36px;
   padding-bottom: 18px;
   gap: 12px;
+}
+.card-face.face-back {
+  padding-top: 52px;
 }
 .card-flip:not(.flipped) .card-face.face-back {
   max-height: 274px;
@@ -2214,7 +2251,7 @@ select::placeholder, input::placeholder, textarea::placeholder {
   align-items: baseline;
   justify-content: flex-start;
   gap: 8px;
-  padding: 16px 72px 9px 0;
+  padding: 2px 8px 9px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 .word-back-front {
@@ -2341,7 +2378,8 @@ select::placeholder, input::placeholder, textarea::placeholder {
   .speech-actions { position: static; margin-top: 10px; max-width: none; }
   .speech-actions .speak-front { flex: 1 1 0; min-width: 0; padding-inline: 8px; }
   .card-face { min-height: 224px; padding: 24px 20px 18px; }
-  .card-face.face-front { padding-top: 30px; padding-bottom: 16px; }
+  .card-face.face-front { padding-top: 34px; padding-bottom: 16px; }
+  .card-face.face-back { padding-top: 50px; }
   .card-flip:not(.flipped) .card-face.face-back { max-height: 262px; }
   .grade-row { gap: 8px; }
   .btn-grade { min-width: 0; padding: 11px 8px; font-size: .88rem; }
