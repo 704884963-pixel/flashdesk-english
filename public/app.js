@@ -83,9 +83,80 @@ const state = {
     song: { mode: 'library', current: null, preview: null, rawLyrics: '', loading: false, error: '', explainingLineId: '' },
   },
   backup: { pending: null, restoring: false, restoreBlocked: false, recovery: null },
+  nav: {
+    depth: 0,
+    stack: [],
+    current: null,
+    lastPrimaryView: 'review',
+    applyingRoute: false,
+    expectingPopstate: false,
+    suppressNextPopstate: false,
+  },
   updateAvailable: false,
   pwaUpdate: null,
 };
+
+function hasUnsavedEditDialogInput() {
+  const dialog = $('#edit-dialog');
+  if (!dialog || !dialog.open) return false;
+  const form = $('#edit-form');
+  const id = form?.dataset?.cardId;
+  const card = state.cards.find((item) => item.id === id);
+  if (!card) return Boolean($('#edit-front')?.value?.trim() || $('#edit-back')?.value?.trim());
+  const front = ($('#edit-front')?.value || '').trim();
+  const back = ($('#edit-back')?.value || '').trim();
+  if (front !== String(card.front || '').trim() || back !== String(card.back || '').trim()) return true;
+  if (card.deck === 'Words') {
+    const details = wordDetails(card);
+    if (($('#edit-memory-reading')?.value || '').trim() !== details.memoryReading) return true;
+    if (($('#edit-chinese-reading')?.value || '').trim() !== details.chineseReading) return true;
+    const currentForms = parseForms($('#edit-forms')?.value || '', front).join('|');
+    if (currentForms !== details.forms.join('|')) return true;
+  }
+  return false;
+}
+
+function hasUnsavedNavigationInput() {
+  if (hasUnsavedEditDialogInput()) return true;
+  if (state.view === 'add') {
+    if (state.addMode === 'batch') {
+      return Boolean($('#batch-import-text')?.value?.trim());
+    }
+    return Boolean(
+      $('#add-front')?.value?.trim()
+      || $('#add-back')?.value?.trim()
+      || $('#add-memory-reading')?.value?.trim()
+      || $('#add-chinese-reading')?.value?.trim()
+      || $('#add-forms')?.value?.trim()
+    );
+  }
+  if (state.view === 'reading' && state.article.mode === 'add') {
+    return Boolean(
+      $('#article-title')?.value?.trim()
+      || $('#article-content')?.value?.trim()
+      || $('#article-source')?.value?.trim()
+      || $('#article-source-url')?.value?.trim()
+    );
+  }
+  if (state.view === 'ai') {
+    if (state.ai.mode === 'helper') {
+      const query = String($('#ai-helper-query')?.value ?? state.ai.helperQuery ?? '').trim();
+      if (!query) return false;
+      const answeredByLookup = Boolean(state.ai.helperLookup && String(state.ai.helperLookup.word || '').trim() === query);
+      const answeredByAi = Boolean(state.ai.helperAnswer && String(state.ai.helperQuery || '').trim() === query);
+      return !answeredByLookup && !answeredByAi;
+    }
+    if (state.ai.mode === 'songs') {
+      if (state.ai.song.mode === 'import') {
+        return Boolean(String($('#song-raw-lyrics')?.value ?? state.ai.song.rawLyrics ?? '').trim());
+      }
+      if (state.ai.song.mode === 'preview') {
+        return Boolean(state.ai.song.preview);
+      }
+    }
+  }
+  return false;
+}
 
 function pwaUpdateRisks() {
   const risks = [];
@@ -94,7 +165,8 @@ function pwaUpdateRisks() {
   if (state.view === 'reading' && state.article.mode === 'reader') risks.push('active-reading');
   if ($('#edit-dialog')?.open || $('#add-front')?.value?.trim() || $('#add-back')?.value?.trim()
       || $('#batch-import-text')?.value?.trim() || $('#article-title')?.value?.trim()
-      || $('#article-content')?.value?.trim() || $('#ai-helper-query')?.value?.trim()) risks.push('unsaved-input');
+      || $('#article-content')?.value?.trim() || $('#ai-helper-query')?.value?.trim()
+      || $('#song-raw-lyrics')?.value?.trim() || hasUnsavedNavigationInput()) risks.push('unsaved-input');
   return risks;
 }
 
@@ -117,7 +189,7 @@ const usageTracker = typeof FlashUsageTracker !== 'undefined'
   : {
     start() {}, stop() {}, setArea() {}, exportStats: () => ({ version: 1, days: {} }), replaceStats() {},
     getTodayStats: () => ({ activeSeconds: 0, sessionCount: 0, areas: { review: 0, words: 0, aiLearning: 0, reading: 0, other: 0 } }),
-    getRecentDaysStats: () => ({ totalSeconds: 0, averageSeconds: 0, validLearningDays: 0 }),
+    getRecentDaysStats: () => ({ totalSeconds: 0, averageSeconds: 0, validLearningDays: 0, days: [] }),
     getAllTimeStats: () => ({ totalSeconds: 0, activeDays: 0, calendarDays: 0, averageSecondsPerActiveDay: 0, averageSecondsPerCalendarDay: 0, longestStreak: 0, firstLearningDate: null }),
     getCurrentStreak: () => 0, getDailyGoal: () => 20,
     setDailyGoal: () => 20,
@@ -1140,7 +1212,6 @@ function renderReview() {
         <span class="review-step-count">${currentStep} / ${totalSession}</span>
         <span class="review-step-track" aria-hidden="true"><span class="review-step-fill" style="width:${progressPct}%"></span></span>
       </div>
-      <button class="card-arrow" id="card-prev" title="上一张（←）" aria-label="上一张" ${arrowsOff}>‹</button>
       <div class="card-slot">
         <button class="card-flip${s.revealed ? ' flipped' : ' revealable'}" id="card-face">
           <div class="card-flip-inner">
@@ -1154,6 +1225,10 @@ function renderReview() {
             </div>
           </div>
         </button>
+        <div class="review-step-actions" role="group" aria-label="切换复习卡片">
+          <button type="button" class="btn card-arrow review-nav-btn" id="card-prev" title="上一张（←）" aria-label="上一张" ${arrowsOff}><span class="review-nav-arrow" aria-hidden="true">‹</span><span>上一张</span></button>
+          <button type="button" class="btn card-arrow review-nav-btn" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}><span>下一张</span><span class="review-nav-arrow" aria-hidden="true">›</span></button>
+        </div>
         <div class="speech-actions" ${s.revealed ? 'hidden' : ''}>
           <button type="button" class="speak-front" id="speak-front" data-speak-rate="1"
             title="美式英语正常发音" aria-label="${normalLabel}">${normalLabel}</button>
@@ -1161,7 +1236,6 @@ function renderReview() {
             title="美式英语慢速发音" aria-label="${slowLabel}">${slowLabel}</button>
         </div>
       </div>
-      <button class="card-arrow" id="card-next" title="下一张（→）" aria-label="下一张" ${arrowsOff}>›</button>
       <div class="grade-row" ${s.revealed ? '' : 'hidden'}>
         <button class="btn-grade btn-again" id="grade-again" title="10 分钟后再复习（按键：1）">再来一次</button>
         <button class="btn-grade btn-got" id="grade-got" title="延长下次复习间隔（按键：2）">记住了</button>
@@ -1638,7 +1712,7 @@ function wordDetailHtml(card, now = Date.now()) {
     ? `<section class="word-detail-section"><div class="micro-label">${label}</div><div>${esc(value)}</div></section>`
     : '';
   return `<div class="word-library-detail">
-    <button type="button" class="word-library-back" data-word-back>← 返回单词库</button>
+    <div class="subview-bar"><button type="button" class="nav-back-btn word-library-back" data-word-back><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
     <article class="panel word-detail-card">
       <div class="word-detail-number">${number}</div>
       <div class="word-detail-title-row">
@@ -1746,8 +1820,7 @@ function handleWordLibraryClick(e) {
     return;
   }
   if (e.target.closest('[data-word-back]')) {
-    state.wordLibrary.selectedId = null;
-    renderWordLibrary();
+    navigateBack({ view: 'words', wordId: null, hash: '#words', primary: true });
     return;
   }
   const edit = e.target.closest('[data-word-edit]');
@@ -2364,7 +2437,7 @@ function helperLookupHtml(entry) {
 
 function renderAiHelper() {
   syncShellHeaderState();
-  $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><div class="subview-bar"><button class="article-back" type="button" data-ai-home>← AI 学习</button><h2 class="subview-title">AI 英语助手</h2></div>
+  $('#ai-root').innerHTML = `<div class="ai-page ai-helper-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-ai-home><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button><h2 class="subview-title">AI 英语助手</h2></div>
     <section class="panel ai-helper-panel">
       <label class="field"><span class="micro-label">输入单词、句子或问题</span><textarea id="ai-helper-query" rows="3" placeholder="输入单词、句子或英语问题…">${esc(state.ai.helperQuery)}</textarea></label>
       <div class="ai-helper-quick" aria-label="快捷问题">
@@ -2462,7 +2535,7 @@ function currentSong() {
 function renderSongLibrary() {
   syncShellHeaderState();
   const songs = [...state.ai.songs].sort((a, b) => Number(b.lastStudiedAt || b.updatedAt) - Number(a.lastStudiedAt || a.updatedAt));
-  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-ai-mode="helper">← 返回英语助手</button>
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-ai-mode="helper" data-nav-back="ai-helper"><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
     <header class="ai-head"><div><h2>歌曲学习</h2><p>保存你自己粘贴的歌词，整首回看；挑选单词和好句进入现有复习系统。</p></div><button type="button" class="btn btn-primary" data-song-import>导入新歌词</button></header>
     <section><h3>我的歌曲</h3>${songs.length ? `<div class="song-library">${songs.map((song) => `<article class="panel song-library-card">
       <button type="button" class="song-library-open" data-song-open="${esc(song.id)}"><strong>${esc(song.title)}</strong>${song.artist ? `<span>${esc(song.artist)}</span>` : ''}<small>已学习 ${FlashSongLearning.learnedCount(song)} / ${song.lines.length} 句 · 上次学习 ${songDate(song.lastStudiedAt || song.updatedAt)}</small></button>
@@ -2472,7 +2545,7 @@ function renderSongLibrary() {
 
 function renderSongImport() {
   syncShellHeaderState();
-  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-song-library><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
     <header class="ai-head"><h2>导入新歌词</h2><p>只整理你粘贴的内容，不会联网补全歌词。</p></header>
     <section class="panel song-import-panel"><label class="field"><span class="micro-label">原始歌词</span><textarea id="song-raw-lyrics" rows="16" placeholder="把歌词直接粘贴到这里。可以包含英文、中文和其它杂乱内容。">${esc(state.ai.song.rawLyrics)}</textarea></label>
     <div class="form-actions"><button type="button" class="btn btn-primary" data-song-organize ${state.ai.song.loading ? 'disabled' : ''}>${state.ai.song.loading ? '正在整理…' : 'AI整理歌词'}</button><button type="button" class="btn" data-song-library>取消</button></div>
@@ -2490,7 +2563,7 @@ function renderSongPreview() {
   syncShellHeaderState();
   const preview = state.ai.song.preview;
   if (!preview) return renderSongImport();
-  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-import>← 返回原始歌词</button>
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-song-import data-nav-back="song-import"><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
     <header class="ai-head"><h2>整理结果预览</h2><p>请确认并修改后再保存；AI 不会自动写入歌曲库。</p></header>
     <form class="panel song-preview" id="song-preview-form"><div class="song-meta-grid"><label class="field"><span class="micro-label">歌名</span><input id="song-preview-title" required value="${esc(preview.title)}"></label><label class="field"><span class="micro-label">歌手</span><input id="song-preview-artist" value="${esc(preview.artist)}"></label></div>
     <div id="song-preview-lines">${preview.lines.map(songPreviewLineHtml).join('')}</div>
@@ -2509,7 +2582,7 @@ function renderSongDetail() {
   const song = currentSong();
   if (!song) { state.ai.song.mode = 'library'; return renderSongLibrary(); }
   syncShellHeaderState();
-  $('#ai-root').innerHTML = `<div class="ai-page song-page"><button class="article-back" type="button" data-song-library>← 我的歌曲</button>
+  $('#ai-root').innerHTML = `<div class="ai-page song-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-song-library><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
     <header class="ai-head song-detail-head"><div><h2>${esc(song.title)}</h2>${song.artist ? `<p>${esc(song.artist)}</p>` : ''}</div></header>
     <div class="song-lines">${song.lines.map((line, index) => `<article class="panel song-line-card${line.learned ? ' is-learned' : ''}" data-song-line-id="${esc(line.id)}"><div class="song-line-head"><span class="micro-label song-line-index">${String(index + 1).padStart(2, '0')}</span><button type="button" class="song-learned-badge${line.learned ? ' song-learned' : ''}" data-song-learned="${esc(line.id)}">${line.learned ? '✓ 已学习' : '○ 学会'}</button></div><p class="song-english">${esc(line.english)}</p>
       ${line.originalChinese ? `<div class="song-original-translation"><p>${esc(line.originalChinese)}</p></div>` : ''}${songExplanationHtml(line.aiExplanation)}
@@ -2602,7 +2675,7 @@ function renderAiSentences() {
       ${exists ? '<span class="ai-exists">已存在于长句库</span>' : `<button class="btn btn-primary" type="button" data-ai-add-sentence="${index}">加入长句库</button>`}</div>
       ${state.ai.revealed.has(index) ? `<p class="ai-translation">${esc(sentence.referenceChinese)}</p>` : ''}</article>`;
   })() : '';
-  $('#ai-root').innerHTML = `<div class="ai-page"><button class="article-back" type="button" data-ai-home>← 返回</button><header class="ai-head"><h2>今日长句</h2><p>优先使用你的新词、易错词和久未练习词。</p></header>
+  $('#ai-root').innerHTML = `<div class="ai-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-ai-home><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div><header class="ai-head"><h2>今日长句</h2><p>优先使用你的新词、易错词和久未练习词。</p></header>
     ${preview ? '' : aiSentenceFocusHtml(state.ai.targets)}
     ${preview ? '' : `<div class="form-actions"><button type="button" class="btn btn-primary" data-ai-generate-sentences ${state.ai.loading ? 'disabled' : ''}>${state.ai.loading ? '正在生成…' : '生成今日长句'}</button></div>`}
     ${state.ai.error ? `<p class="ai-error">${esc(state.ai.error)}</p>` : ''}<div class="ai-results">${card}</div>${preview ? `${aiUsageHtml(preview.usage)}<div class="form-actions"><button type="button" class="btn" data-ai-generate-sentences>换一句</button></div>` : ''}${aiSettingsHtml()}</div>`;
@@ -2613,7 +2686,7 @@ function renderAiArticle() {
   const preview = state.ai.preview?.type === 'article' ? state.ai.preview : null;
   const words = preview ? FlashArticleUtils.wordTokens(preview.data.content).length : 0;
   const lookup = FlashArticleUtils.buildWordLookup(state.cards);
-  $('#ai-root').innerHTML = `<div class="ai-page"><button class="article-back" type="button" data-ai-home>← 返回</button><header class="ai-head"><h2>今日短文</h2><p>生成自然、完整的个性化英文阅读材料。</p></header>
+  $('#ai-root').innerHTML = `<div class="ai-page"><div class="subview-bar"><button class="nav-back-btn article-back" type="button" data-ai-home><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div><header class="ai-head"><h2>今日短文</h2><p>生成自然、完整的个性化英文阅读材料。</p></header>
     <div class="panel ai-options"><label class="field"><span class="micro-label">Topic</span><select id="ai-topic"><option value="auto">自动</option><option value="ai-tech">AI与科技</option><option value="work">工作</option><option value="travel">旅行</option><option value="daily">日常生活</option><option value="business">商业经济</option></select></label>
     <label class="field"><span class="micro-label">Difficulty</span><select id="ai-difficulty"><option value="easy">简单</option><option value="medium">适中</option></select></label></div>
     ${preview ? '' : aiTargetHtml(state.ai.targets, '本篇重点词')}
@@ -2775,7 +2848,7 @@ function renderArticleHome() {
 function renderArticleAdd() {
   syncShellHeaderState();
   $('#article-root').innerHTML = `<div class="article-page-head">
-      <div><button type="button" class="article-back" data-article-list>← 返回</button><h2>添加文章</h2></div>
+      <div><div class="subview-bar"><button type="button" class="nav-back-btn article-back" data-article-list><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div><h2>添加文章</h2></div>
     </div>
     <form id="article-form" class="panel form-panel article-form">
       <label class="field"><span class="micro-label">标题 *</span><input id="article-title" required></label>
@@ -2849,7 +2922,7 @@ function renderArticleReader() {
     .map((paragraph, index) => articleParagraphRowHtml(paragraph, index, metrics.lookup, translations)).join('');
   $('#article-root').innerHTML = `<article class="article-reader">
     <header class="article-reader-head">
-      <button type="button" class="article-back" data-article-list>← 返回</button>
+      <div class="subview-bar"><button type="button" class="nav-back-btn article-back" data-article-list><span class="nav-back-arrow" aria-hidden="true">←</span><span>返回</span></button></div>
       <h2>${esc(article.title)}</h2>
       ${sourceLine ? `<div class="article-source">${esc(sourceLine)}</div>` : ''}
       <div class="article-reader-meta">
@@ -3506,6 +3579,7 @@ function renderUsageView() {
 
 /* ---------- views ---------- */
 
+const PRIMARY_VIEWS = new Set(['review', 'words', 'ai']);
 const MORE_VIEWS = new Set(['reading', 'add', 'quiz', 'browse', 'usage', 'backup']);
 
 const VIEW_META = Object.freeze({
@@ -3520,13 +3594,501 @@ const VIEW_META = Object.freeze({
   backup: ['数据备份', '安全保存和恢复学习记录'],
 });
 
+function canUseBrowserHistory() {
+  return typeof history !== 'undefined'
+    && history !== null
+    && typeof history.replaceState === 'function'
+    && typeof history.pushState === 'function';
+}
+
+function currentRouteSnapshot() {
+  const view = state.view || 'review';
+  if (view === 'words') {
+    const wordId = state.wordLibrary.selectedId || null;
+    if (wordId) {
+      return {
+        view: 'words',
+        wordId,
+        hash: `#words/${encodeURIComponent(wordId)}`,
+        primary: false,
+      };
+    }
+    return { view: 'words', wordId: null, hash: '#words', primary: true };
+  }
+  if (view === 'ai') {
+    const aiMode = state.ai.mode || 'home';
+    if (aiMode === 'home') {
+      return { view: 'ai', aiMode: 'home', hash: '#ai', primary: true };
+    }
+    if (aiMode === 'songs') {
+      const songMode = state.ai.song.mode || 'library';
+      const songId = songMode === 'detail' ? (state.ai.song.current?.id || null) : null;
+      const hash = songMode === 'detail' && songId
+        ? `#ai/songs/${encodeURIComponent(songId)}`
+        : songMode === 'import'
+          ? '#ai/songs/import'
+          : songMode === 'preview'
+            ? '#ai/songs/preview'
+            : '#ai/songs';
+      return {
+        view: 'ai',
+        aiMode: 'songs',
+        songMode,
+        songId,
+        hash,
+        primary: false,
+      };
+    }
+    return {
+      view: 'ai',
+      aiMode,
+      draftId: state.ai.preview?.draftId || null,
+      hash: `#ai/${encodeURIComponent(aiMode)}`,
+      primary: false,
+    };
+  }
+  if (view === 'reading') {
+    const articleMode = state.article.mode || 'list';
+    const articleId = articleMode === 'reader' ? (state.article.current?.id || null) : null;
+    const hash = articleMode === 'reader' && articleId
+      ? `#reading/${encodeURIComponent(articleId)}`
+      : articleMode === 'add'
+        ? '#reading/add'
+        : '#reading';
+    return {
+      view: 'reading',
+      articleMode,
+      articleId,
+      hash,
+      primary: false,
+    };
+  }
+  if (MORE_VIEWS.has(view)) {
+    return {
+      view,
+      hash: `#${view}`,
+      primary: false,
+    };
+  }
+  return { view: 'review', hash: '#review', primary: true };
+}
+
+function normalizeRouteState(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.view) {
+    return { view: 'review', hash: '#review', primary: true };
+  }
+  const view = raw.view;
+  if (view === 'words') {
+    const wordId = raw.wordId || null;
+    return wordId
+      ? { view: 'words', wordId, hash: `#words/${encodeURIComponent(wordId)}`, primary: false }
+      : { view: 'words', wordId: null, hash: '#words', primary: true };
+  }
+  if (view === 'ai') {
+    const aiMode = raw.aiMode || 'home';
+    if (aiMode === 'home') return { view: 'ai', aiMode: 'home', hash: '#ai', primary: true };
+    if (aiMode === 'songs') {
+      const songMode = raw.songMode || 'library';
+      const songId = songMode === 'detail' ? (raw.songId || null) : null;
+      const hash = songMode === 'detail' && songId
+        ? `#ai/songs/${encodeURIComponent(songId)}`
+        : songMode === 'import'
+          ? '#ai/songs/import'
+          : songMode === 'preview'
+            ? '#ai/songs/preview'
+            : '#ai/songs';
+      return { view: 'ai', aiMode: 'songs', songMode, songId, hash, primary: false };
+    }
+    return { view: 'ai', aiMode, hash: `#ai/${encodeURIComponent(aiMode)}`, primary: false };
+  }
+  if (view === 'reading') {
+    const articleMode = raw.articleMode || 'list';
+    const articleId = articleMode === 'reader' ? (raw.articleId || null) : null;
+    const hash = articleMode === 'reader' && articleId
+      ? `#reading/${encodeURIComponent(articleId)}`
+      : articleMode === 'add'
+        ? '#reading/add'
+        : '#reading';
+    return { view: 'reading', articleMode, articleId, hash, primary: false };
+  }
+  if (MORE_VIEWS.has(view)) {
+    return { view, hash: `#${view}`, primary: false };
+  }
+  return { view: 'review', hash: '#review', primary: true };
+}
+
+function isSameRoute(a, b) {
+  if (!a || !b) return false;
+  return a.hash === b.hash
+    && a.view === b.view
+    && (a.wordId || null) === (b.wordId || null)
+    && (a.aiMode || null) === (b.aiMode || null)
+    && (a.songMode || null) === (b.songMode || null)
+    && (a.songId || null) === (b.songId || null)
+    && (a.articleMode || null) === (b.articleMode || null)
+    && (a.articleId || null) === (b.articleId || null);
+}
+
+function getFallbackRoute(route = currentRouteSnapshot()) {
+  if (!route) return { view: 'review', hash: '#review', primary: true };
+  if (route.view === 'words' && route.wordId) {
+    return { view: 'words', wordId: null, hash: '#words', primary: true };
+  }
+  if (route.view === 'ai') {
+    if (route.aiMode === 'songs') {
+      if (route.songMode === 'preview') {
+        return { view: 'ai', aiMode: 'songs', songMode: 'import', songId: null, hash: '#ai/songs/import', primary: false };
+      }
+      if (route.songMode === 'import' || route.songMode === 'detail') {
+        return { view: 'ai', aiMode: 'songs', songMode: 'library', songId: null, hash: '#ai/songs', primary: false };
+      }
+      return { view: 'ai', aiMode: 'helper', hash: '#ai/helper', primary: false };
+    }
+    if (route.aiMode && route.aiMode !== 'home') {
+      return { view: 'ai', aiMode: 'home', hash: '#ai', primary: true };
+    }
+  }
+  if (route.view === 'reading') {
+    if (route.articleMode && route.articleMode !== 'list') {
+      return { view: 'reading', articleMode: 'list', articleId: null, hash: '#reading', primary: false };
+    }
+    const primary = state.nav?.lastPrimaryView || 'review';
+    return { view: primary, hash: `#${primary}`, primary: true };
+  }
+  if (route.view === 'add' && state.article.returnToId) {
+    const id = state.article.returnToId;
+    return { view: 'reading', articleMode: 'reader', articleId: id, hash: `#reading/${encodeURIComponent(id)}`, primary: false };
+  }
+  if (MORE_VIEWS.has(route.view)) {
+    const primary = state.nav?.lastPrimaryView || 'review';
+    return { view: primary, hash: `#${primary}`, primary: true };
+  }
+  return { view: 'review', hash: '#review', primary: true };
+}
+
+function parseRouteFromHash(rawHash) {
+  const cleaned = String(rawHash || '').replace(/^#+/, '').trim();
+  if (!cleaned || cleaned === 'review') {
+    return { view: 'review', hash: '#review', primary: true };
+  }
+  const parts = cleaned.split('/').map((part) => {
+    try { return decodeURIComponent(part); } catch { return part; }
+  });
+  const head = parts[0];
+  if (head === 'words') {
+    const wordId = parts[1] || null;
+    if (wordId) {
+      const exists = state.cards.find((card) => card.id === wordId && card.deck === 'Words');
+      if (exists) return { view: 'words', wordId, hash: `#words/${encodeURIComponent(wordId)}`, primary: false };
+    }
+    return { view: 'words', wordId: null, hash: '#words', primary: true };
+  }
+  if (head === 'ai') {
+    const sub = parts[1] || 'home';
+    if (sub === 'helper' || sub === 'sentences' || sub === 'article') {
+      return { view: 'ai', aiMode: sub, hash: `#ai/${sub}`, primary: false };
+    }
+    if (sub === 'songs') {
+      const third = parts[2] || '';
+      if (third === 'import') {
+        return { view: 'ai', aiMode: 'songs', songMode: 'import', songId: null, hash: '#ai/songs/import', primary: false };
+      }
+      if (third === 'preview' && state.ai.song.preview) {
+        return { view: 'ai', aiMode: 'songs', songMode: 'preview', songId: null, hash: '#ai/songs/preview', primary: false };
+      }
+      if (third && third !== 'preview') {
+        const song = state.ai.songs.find((item) => item.id === third);
+        if (song) {
+          return { view: 'ai', aiMode: 'songs', songMode: 'detail', songId: song.id, hash: `#ai/songs/${encodeURIComponent(song.id)}`, primary: false };
+        }
+      }
+      return { view: 'ai', aiMode: 'songs', songMode: 'library', songId: null, hash: '#ai/songs', primary: false };
+    }
+    return { view: 'ai', aiMode: 'home', hash: '#ai', primary: true };
+  }
+  if (head === 'reading') {
+    const sub = parts[1] || '';
+    if (sub === 'add') {
+      return { view: 'reading', articleMode: 'add', articleId: null, hash: '#reading/add', primary: false };
+    }
+    if (sub) {
+      const article = state.articles.find((item) => item.id === sub);
+      if (article) {
+        return { view: 'reading', articleMode: 'reader', articleId: article.id, hash: `#reading/${encodeURIComponent(article.id)}`, primary: false };
+      }
+    }
+    return { view: 'reading', articleMode: 'list', articleId: null, hash: '#reading', primary: false };
+  }
+  if (MORE_VIEWS.has(head)) {
+    return { view: head, hash: `#${head}`, primary: false };
+  }
+  return { view: 'review', hash: '#review', primary: true };
+}
+
+function confirmLeaveIfDirty() {
+  if (!hasUnsavedNavigationInput()) return true;
+  const confirmFn = (typeof window !== 'undefined' && typeof window.confirm === 'function')
+    ? window.confirm.bind(window)
+    : (typeof confirm === 'function' ? confirm : null);
+  if (!confirmFn) return true;
+  return Boolean(confirmFn('当前页面有未保存的输入内容，确定要离开吗？'));
+}
+
+function clearDirtyInputForCurrentScreen() {
+  if ($('#edit-dialog')?.open) {
+    $('#edit-dialog').close();
+  }
+  if (state.view === 'add') {
+    if (state.addMode === 'batch') {
+      if ($('#batch-import-text')) $('#batch-import-text').value = '';
+      state.batchPreview = null;
+    } else {
+      if ($('#add-front')) $('#add-front').value = '';
+      if ($('#add-back')) $('#add-back').value = '';
+      if ($('#add-memory-reading')) $('#add-memory-reading').value = '';
+      if ($('#add-chinese-reading')) $('#add-chinese-reading').value = '';
+      if ($('#add-forms')) $('#add-forms').value = '';
+    }
+  } else if (state.view === 'reading' && state.article.mode === 'add') {
+    if ($('#article-title')) $('#article-title').value = '';
+    if ($('#article-content')) $('#article-content').value = '';
+    if ($('#article-source')) $('#article-source').value = '';
+    if ($('#article-source-url')) $('#article-source-url').value = '';
+  } else if (state.view === 'ai') {
+    if (state.ai.mode === 'helper') {
+      if ($('#ai-helper-query')) $('#ai-helper-query').value = '';
+      state.ai.helperQuery = '';
+    } else if (state.ai.mode === 'songs') {
+      if (state.ai.song.mode === 'import') {
+        if ($('#song-raw-lyrics')) $('#song-raw-lyrics').value = '';
+        state.ai.song.rawLyrics = '';
+      } else if (state.ai.song.mode === 'preview') {
+        state.ai.song.preview = null;
+      }
+    }
+  }
+}
+
+function syncHistoryState({ forceReplace = false } = {}) {
+  if (!state.nav || state.nav.applyingRoute) return;
+  const route = currentRouteSnapshot();
+  if (route.primary) {
+    state.nav.lastPrimaryView = route.view;
+    const entry = { ...route, depth: 0 };
+    state.nav.depth = 0;
+    state.nav.stack = [entry];
+    state.nav.current = entry;
+    if (canUseBrowserHistory()) {
+      try { history.replaceState(entry, '', entry.hash); } catch { /* sandboxed location */ }
+    }
+    return;
+  }
+  if (!state.nav.stack.length) {
+    const baseView = state.nav.lastPrimaryView || 'review';
+    const baseEntry = { view: baseView, hash: `#${baseView}`, primary: true, depth: 0 };
+    state.nav.stack = [baseEntry];
+  }
+  if (isSameRoute(state.nav.current, route)) {
+    const entry = { ...route, depth: state.nav.depth };
+    state.nav.current = entry;
+    state.nav.stack[state.nav.stack.length - 1] = entry;
+    if (canUseBrowserHistory()) {
+      try { history.replaceState(entry, '', entry.hash); } catch { /* sandboxed location */ }
+    }
+    return;
+  }
+  if (forceReplace) {
+    const entry = { ...route, depth: state.nav.depth };
+    state.nav.current = entry;
+    state.nav.stack[state.nav.stack.length - 1] = entry;
+    if (canUseBrowserHistory()) {
+      try { history.replaceState(entry, '', entry.hash); } catch { /* sandboxed location */ }
+    }
+    return;
+  }
+  const nextDepth = state.nav.depth + 1;
+  const entry = { ...route, depth: nextDepth };
+  state.nav.depth = nextDepth;
+  state.nav.stack.push(entry);
+  state.nav.current = entry;
+  if (canUseBrowserHistory()) {
+    try { history.pushState(entry, '', entry.hash); } catch { /* sandboxed location */ }
+  }
+}
+
+function applyRouteState(rawRoute, { replaceHistory = false } = {}) {
+  if (!rawRoute || !state.nav) return;
+  const route = normalizeRouteState(rawRoute);
+  state.nav.applyingRoute = true;
+  try {
+    if (state.view === 'ai' && state.ai.narrationRate !== null && (route.view !== 'ai' || route.aiMode !== 'article')) {
+      stopAiArticleNarration(false);
+    }
+    if (state.view === 'reading' && (route.view !== 'reading' || route.articleMode !== 'reader')) {
+      stopArticleProgressTracking();
+      stopArticleParagraphNarration(false);
+      flushArticleProgress();
+      closeReadingProgressIdentity();
+      state.article.revealedParagraphs = new Set();
+    }
+    stopEnglishPlayback();
+
+    if (route.view === 'words') {
+      const card = route.wordId
+        ? state.cards.find((item) => item.id === route.wordId && item.deck === 'Words')
+        : null;
+      state.wordLibrary.selectedId = card ? card.id : null;
+    } else if (route.view === 'ai') {
+      state.ai.mode = route.aiMode || 'home';
+      state.ai.error = '';
+      if (state.ai.mode === 'songs') {
+        const songMode = route.songMode || 'library';
+        if (songMode === 'detail') {
+          const song = state.ai.songs.find((item) => item.id === route.songId) || state.ai.song.current || null;
+          if (song) {
+            state.ai.song.current = song;
+            state.ai.song.mode = 'detail';
+          } else {
+            state.ai.song.current = null;
+            state.ai.song.mode = 'library';
+          }
+        } else if (songMode === 'preview' && state.ai.song.preview) {
+          state.ai.song.mode = 'preview';
+        } else if (songMode === 'import') {
+          state.ai.song.mode = 'import';
+        } else {
+          state.ai.song.current = null;
+          state.ai.song.mode = 'library';
+        }
+      }
+    } else if (route.view === 'reading') {
+      const articleMode = route.articleMode || 'list';
+      if (articleMode === 'reader') {
+        const article = state.articles.find((item) => item.id === route.articleId) || state.article.current || null;
+        if (article) {
+          state.article.current = article;
+          state.article.mode = 'reader';
+        } else {
+          state.article.current = null;
+          state.article.mode = 'list';
+        }
+      } else if (articleMode === 'add') {
+        state.article.current = null;
+        state.article.mode = 'add';
+      } else {
+        state.article.current = null;
+        state.article.mode = 'list';
+      }
+    }
+
+    switchView(route.view, { fromHistory: true });
+  } finally {
+    state.nav.applyingRoute = false;
+  }
+
+  const resolved = currentRouteSnapshot();
+  if (resolved.primary) {
+    state.nav.lastPrimaryView = resolved.view;
+  }
+  const depth = typeof rawRoute.depth === 'number'
+    ? Math.max(0, rawRoute.depth)
+    : (resolved.primary ? 0 : state.nav.depth);
+  const entry = { ...resolved, depth };
+  state.nav.depth = depth;
+  state.nav.current = entry;
+  if (depth === 0) {
+    state.nav.stack = [entry];
+  }
+  if (replaceHistory && canUseBrowserHistory()) {
+    try { history.replaceState(entry, '', entry.hash); } catch { /* sandboxed location */ }
+  }
+  if (typeof document !== 'undefined' && document.body && document.body.classList) {
+    const inSubView =
+      (state.view === 'ai' && state.ai.mode !== 'home') ||
+      (state.view === 'words' && Boolean(state.wordLibrary.selectedId)) ||
+      (state.view === 'reading' && state.article.mode !== 'list');
+    document.body.classList.toggle('in-subview', inSubView);
+    const pageBackBar = $('#page-back-bar');
+    if (pageBackBar) {
+      pageBackBar.hidden = inSubView || !MORE_VIEWS.has(state.view);
+    }
+  }
+}
+
+function navigateBack(explicitFallback = null) {
+  if (!confirmLeaveIfDirty()) return false;
+  clearDirtyInputForCurrentScreen();
+  const canBackInApp = Boolean(state.nav && state.nav.depth > 0);
+  if (canBackInApp && canUseBrowserHistory() && typeof history.back === 'function') {
+    if (state.nav.stack.length > 1) state.nav.stack.pop();
+    const target = state.nav.stack[state.nav.stack.length - 1]
+      || explicitFallback
+      || getFallbackRoute(state.nav.current);
+    const nextDepth = Math.max(0, state.nav.depth - 1);
+    const targetWithDepth = { ...target, depth: target.primary ? 0 : nextDepth };
+    state.nav.expectingPopstate = true;
+    applyRouteState(targetWithDepth, { replaceHistory: false });
+    try { history.back(); } catch { state.nav.expectingPopstate = false; }
+    return true;
+  }
+  const fallback = explicitFallback || getFallbackRoute(currentRouteSnapshot());
+  const nextDepth = fallback.primary ? 0 : Math.max(0, (state.nav?.depth || 1) - 1);
+  if (state.nav && state.nav.stack.length > 1) state.nav.stack.pop();
+  applyRouteState({ ...fallback, depth: nextDepth }, { replaceHistory: true });
+  return true;
+}
+
+function handlePopState(event) {
+  if (!state.nav) return;
+  if (state.nav.suppressNextPopstate) {
+    state.nav.suppressNextPopstate = false;
+    return;
+  }
+  const incoming = (event && event.state && event.state.view)
+    ? normalizeRouteState(event.state)
+    : parseRouteFromHash(typeof location !== 'undefined' ? location.hash : '');
+  if (state.nav.expectingPopstate) {
+    state.nav.expectingPopstate = false;
+    if (isSameRoute(state.nav.current, incoming)) return;
+  }
+  if (isSameRoute(state.nav.current, incoming)) return;
+  if (!confirmLeaveIfDirty()) {
+    const restore = state.nav.current || currentRouteSnapshot();
+    if (canUseBrowserHistory()) {
+      state.nav.suppressNextPopstate = true;
+      try { history.pushState(restore, '', restore.hash); } catch { state.nav.suppressNextPopstate = false; }
+    }
+    return;
+  }
+  clearDirtyInputForCurrentScreen();
+  const incomingDepth = typeof event?.state?.depth === 'number'
+    ? Math.max(0, event.state.depth)
+    : (incoming.primary ? 0 : Math.max(0, state.nav.depth - 1));
+  if (incomingDepth === 0) {
+    state.nav.stack = [{ ...incoming, depth: 0 }];
+  } else if (state.nav.stack.length > incomingDepth + 1) {
+    state.nav.stack = state.nav.stack.slice(0, incomingDepth + 1);
+  }
+  applyRouteState({ ...incoming, depth: incomingDepth }, { replaceHistory: false });
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('popstate', handlePopState);
+}
+
 function syncShellHeaderState() {
-  if (typeof document === 'undefined' || !document.body || !document.body.classList) return;
-  const inSubView =
-    (state.view === 'ai' && state.ai.mode !== 'home') ||
-    (state.view === 'words' && Boolean(state.wordLibrary.selectedId)) ||
-    (state.view === 'reading' && state.article.mode !== 'list');
-  document.body.classList.toggle('in-subview', inSubView);
+  if (typeof document !== 'undefined' && document.body && document.body.classList) {
+    const inSubView =
+      (state.view === 'ai' && state.ai.mode !== 'home') ||
+      (state.view === 'words' && Boolean(state.wordLibrary.selectedId)) ||
+      (state.view === 'reading' && state.article.mode !== 'list');
+    document.body.classList.toggle('in-subview', inSubView);
+    const pageBackBar = $('#page-back-bar');
+    if (pageBackBar) {
+      pageBackBar.hidden = inSubView || !MORE_VIEWS.has(state.view);
+    }
+  }
+  syncHistoryState();
 }
 
 function updatePageHeader(name) {
@@ -3557,44 +4119,62 @@ function updateNavigationState(name) {
   if (more) more.classList.toggle('btn-active', MORE_VIEWS.has(name));
 }
 
-function switchView(name) {
-  if (state.ai.narrationRate !== null && name !== 'ai') stopAiArticleNarration(false);
-  if (state.article.narrationRate !== null && name !== 'reading') stopArticleParagraphNarration(false);
-  stopEnglishPlayback();
-  if (state.view === 'reading' && name !== 'reading') {
-    stopArticleProgressTracking();
-    flushArticleProgress();
-    closeReadingProgressIdentity();
+function switchView(name, options = {}) {
+  const prevState = state.nav ? { ...state.nav, stack: [...(state.nav.stack || [])] } : null;
+  if (state.nav && !options.fromHistory) {
+    state.nav.applyingRoute = true;
   }
-  state.view = name;
-  setMoreMenuOpen(false);
-  document.body.classList.toggle('reading-view', name === 'reading');
-  updateNavigationState(name);
-  updatePageHeader(name);
-  for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'usage', 'backup']) $(`#view-${v}`).hidden = v !== name;
-  usageTracker.setArea(usageAreaForView(name));
-  if (name === 'review') {
-    state.session = freshSession();
-    buildQueue();
-    renderReview();
-  } else if (name === 'quiz') {
-    state.quiz = freshQuiz();
-    renderQuiz();
-  } else if (name === 'browse') {
-    renderBrowse();
-  } else if (name === 'words') {
-    renderWordLibrary();
-  } else if (name === 'reading') {
-    renderArticleView();
-  } else if (name === 'ai') {
-    renderAiView();
-  } else if (name === 'backup') {
-    renderBackupView();
-  } else if (name === 'usage') {
-    renderUsageView();
-  } else if (name === 'add') {
-    updateAddForm();
-    setAddMode(state.addMode);
+  try {
+    if (state.ai.narrationRate !== null && name !== 'ai') stopAiArticleNarration(false);
+    if (state.article.narrationRate !== null && name !== 'reading') stopArticleParagraphNarration(false);
+    stopEnglishPlayback();
+    if (state.view === 'reading' && name !== 'reading') {
+      stopArticleProgressTracking();
+      flushArticleProgress();
+      closeReadingProgressIdentity();
+    }
+    state.view = name;
+    setMoreMenuOpen(false);
+    if (typeof document !== 'undefined' && document.body && document.body.classList) {
+      document.body.classList.toggle('reading-view', name === 'reading');
+    }
+    updateNavigationState(name);
+    updatePageHeader(name);
+    for (const v of ['review', 'quiz', 'add', 'words', 'reading', 'ai', 'browse', 'usage', 'backup']) {
+      const section = $(`#view-${v}`);
+      if (section) section.hidden = v !== name;
+    }
+    usageTracker.setArea(usageAreaForView(name));
+    if (name === 'review') {
+      state.session = freshSession();
+      buildQueue();
+      renderReview();
+    } else if (name === 'quiz') {
+      state.quiz = freshQuiz();
+      renderQuiz();
+    } else if (name === 'browse') {
+      renderBrowse();
+    } else if (name === 'words') {
+      renderWordLibrary();
+    } else if (name === 'reading') {
+      renderArticleView();
+    } else if (name === 'ai') {
+      renderAiView();
+    } else if (name === 'backup') {
+      renderBackupView();
+    } else if (name === 'usage') {
+      renderUsageView();
+    } else if (name === 'add') {
+      updateAddForm();
+      setAddMode(state.addMode);
+    }
+  } finally {
+    if (state.nav && !options.fromHistory) {
+      state.nav.applyingRoute = Boolean(prevState?.applyingRoute);
+      if (!state.nav.applyingRoute) {
+        syncShellHeaderState();
+      }
+    }
   }
 }
 
@@ -3602,8 +4182,13 @@ function switchView(name) {
 
 function bindEvents() {
   $('#pwa-update-now')?.addEventListener('click', () => state.pwaUpdate?.apply());
+  $('#page-back-btn')?.addEventListener('click', () => {
+    navigateBack();
+  });
   document.querySelectorAll('.tab').forEach((b) =>
     b.addEventListener('click', () => {
+      if (!confirmLeaveIfDirty()) return;
+      clearDirtyInputForCurrentScreen();
       if (b.dataset.view === 'words') state.wordLibrary.selectedId = null;
       if (b.dataset.view === 'reading') state.article.mode = 'list';
       if (b.dataset.view === 'ai') state.ai.mode = 'home';
@@ -3937,9 +4522,7 @@ function bindEvents() {
       flushArticleProgress();
       closeReadingProgressIdentity();
       state.article.revealedParagraphs = new Set();
-      state.article.mode = 'list';
-      state.article.current = null;
-      renderArticleHome();
+      navigateBack({ view: 'reading', articleMode: 'list', articleId: null, hash: '#reading', primary: false });
     } else if (button.dataset.articleOpen) {
       await openArticle(button.dataset.articleOpen);
     } else if (button.dataset.articleDelete) {
@@ -4034,6 +4617,10 @@ function bindEvents() {
       state.ai.drafts = state.ai.drafts.filter((item) => item.id !== button.dataset.aiDeleteDraft);
       renderAiHome();
     } else if (button.dataset.aiMode) {
+      if (button.hasAttribute('data-nav-back')) {
+        navigateBack({ view: 'ai', aiMode: button.dataset.aiMode, hash: `#ai/${button.dataset.aiMode}`, primary: false });
+        return;
+      }
       if (state.ai.mode === 'article' && button.dataset.aiMode !== 'article') stopAiArticleNarration(false);
       state.ai.mode = button.dataset.aiMode; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; state.ai.error = ''; renderAiView();
     } else if (button.hasAttribute('data-ai-song-home')) {
@@ -4050,7 +4637,8 @@ function bindEvents() {
       openAiSentenceWord(button.dataset.aiWord, '', { cardId: button.dataset.aiHelperWordCandidate });
     } else if (button.hasAttribute('data-ai-home')) {
       stopAiArticleNarration(false);
-      state.ai.mode = 'home'; state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0; renderAiHome();
+      if (!navigateBack({ view: 'ai', aiMode: 'home', hash: '#ai', primary: true })) return;
+      state.ai.preview = null; state.ai.targets = []; state.ai.candidateCount = 0;
     } else if (button.hasAttribute('data-ai-save-settings')) {
       saveAiSettings($('#ai-endpoint').value, $('#ai-token').value); $('#ai-service-status').textContent = 'AI 设置已保存在此设备。';
     } else if (button.hasAttribute('data-ai-test')) {
@@ -4075,9 +4663,14 @@ function bindEvents() {
     } else if (button.dataset.aiSpeak !== undefined) {
       playEnglish(button.dataset.aiSpeak, { rate: Number(button.dataset.rate) || 1, button });
     } else if (button.hasAttribute('data-song-import')) {
-      state.ai.song.mode = 'import'; state.ai.song.error = ''; renderSongImport();
+      if (button.hasAttribute('data-nav-back') || state.ai.song.mode === 'preview') {
+        navigateBack({ view: 'ai', aiMode: 'songs', songMode: 'import', songId: null, hash: '#ai/songs/import', primary: false });
+      } else {
+        state.ai.song.mode = 'import'; state.ai.song.error = ''; renderSongImport();
+      }
     } else if (button.hasAttribute('data-song-library')) {
-      state.ai.song.mode = 'library'; state.ai.song.current = null; state.ai.song.error = ''; renderSongLibrary();
+      state.ai.song.error = '';
+      navigateBack({ view: 'ai', aiMode: 'songs', songMode: 'library', songId: null, hash: '#ai/songs', primary: false });
     } else if (button.dataset.songOpen !== undefined) {
       const song = state.ai.songs.find((item) => item.id === button.dataset.songOpen);
       if (song) { state.ai.song.current = song; state.ai.song.mode = 'detail'; state.ai.song.error = ''; renderSongDetail(); }
@@ -4152,8 +4745,11 @@ function bindEvents() {
 
   $('#ai-root').addEventListener('input', (e) => {
     if (e.target.id === 'ai-helper-query') {
+      state.ai.helperQuery = e.target.value;
       e.target.style.height = 'auto';
       e.target.style.height = `${Math.max(94, e.target.scrollHeight)}px`;
+    } else if (e.target.id === 'song-raw-lyrics') {
+      state.ai.song.rawLyrics = e.target.value;
     }
   });
 
@@ -4389,7 +4985,8 @@ async function init() {
   }
   await refreshAudioCacheStats();
   renderDeckControls();
-  switchView('review');
+  const initialRoute = parseRouteFromHash(typeof location !== 'undefined' ? location.hash : '');
+  applyRouteState({ ...initialRoute, depth: 0 }, { replaceHistory: true });
   if (!state.backup.restoreBlocked) usageTracker.start();
 }
 
