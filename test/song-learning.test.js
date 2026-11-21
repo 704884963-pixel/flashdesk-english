@@ -68,6 +68,19 @@ test('lyrics timeout keeps the original input and allows the same organize actio
   assert.doesNotMatch(organize, /rawLyrics\s*=\s*''|createSong|saveNewCard|addCard/);
   assert.match(app, /data-song-organize[\s\S]*await organizeSongLyrics\(\)/);
 });
+test('lyrics import failure never clears the pasted text or writes a half song', () => {
+  const organize = app.slice(app.indexOf('async function organizeSongLyrics'), app.indexOf('function collectSongPreview'));
+  // The paste is captured before the request and only reset after a song is
+  // saved, so every failure path keeps it available for another attempt.
+  assert.match(organize, /state\.ai\.song\.rawLyrics = rawLyrics; state\.ai\.song\.loading = true/);
+  assert.doesNotMatch(organize, /rawLyrics = ''/);
+  assert.match(organize, /catch \(error\) \{\s*state\.ai\.song\.error =/);
+  assert.match(organize, /normalizeOrganizedLyrics\(response\.data\)[\s\S]*?catch/);
+});
+test('a truncated AI answer surfaces as truncation instead of a format error', () => {
+  assert.match(app, /TRUNCATED_OUTPUT: 'AI 输出被截断，请缩短内容后重试。'/);
+  assert.match(app, /reason: body\?\.error\?\.reason \|\| ''/);
+});
 test('lyrics input has an explicit non-truncating upper bound', () => {
   assert.equal(Ai.MAX_LYRICS_CHARS, 12000);
   assert.throws(() => Ai.buildOrganizeLyricsRequest('x'.repeat(12001)), /歌词内容过长/);

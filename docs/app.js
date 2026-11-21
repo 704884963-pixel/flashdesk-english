@@ -2074,8 +2074,8 @@ async function aiFetch(path, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ok === false) {
     const code = body?.error?.code || 'UPSTREAM_ERROR';
-    const messages = { UNAUTHORIZED: '访问 Token 无效。', RATE_LIMITED: '请求过于频繁，请稍后再试。', INVALID_AI_OUTPUT: 'AI 输出格式错误，请重试。', TIMEOUT: 'AI 请求超时，请重试。', INVALID_REQUEST: 'AI 请求数据无效。' };
-    throw Object.assign(new Error(messages[code] || 'AI 服务暂时不可用。'), { code });
+    const messages = { UNAUTHORIZED: '访问 Token 无效。', RATE_LIMITED: '请求过于频繁，请稍后再试。', INVALID_AI_OUTPUT: 'AI 输出格式错误，请重试。', TRUNCATED_OUTPUT: 'AI 输出被截断，请缩短内容后重试。', TIMEOUT: 'AI 请求超时，请重试。', INVALID_REQUEST: 'AI 请求数据无效。' };
+    throw Object.assign(new Error(messages[code] || 'AI 服务暂时不可用。'), { code, reason: body?.error?.reason || '' });
   }
   return body;
 }

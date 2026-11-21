@@ -16,7 +16,7 @@ export const TASK_OUTPUT_TOKEN_LIMITS = Object.freeze({
   translate_article: 2000,
   lookup_word: 480,
   english_helper: 520,
-  organize_lyrics: 2400,
+  organize_lyrics: 4096,
   explain_lyric: 700,
 });
 export const TASK_ATTEMPT_LIMITS = Object.freeze({
@@ -37,7 +37,7 @@ const cors = (origin, env) => {
   return headers;
 };
 const reply = (body, status, origin, env) => { const headers = cors(origin, env); headers.set('Content-Type', 'application/json; charset=utf-8'); headers.set('Cache-Control', 'no-store'); return new Response(JSON.stringify(body), { status, headers }); };
-const failure = (code, message, status, origin, env, diagnostics = {}) => reply({ ok: false, error: { code, message }, ...diagnostics }, status, origin, env);
+const failure = (code, message, status, origin, env, diagnostics = {}, reason = '') => reply({ ok: false, error: { code, message, ...(reason ? { reason } : {}) }, ...diagnostics }, status, origin, env);
 const authorized = (request, env) => request.headers.get('Authorization') === `Bearer ${env.FLASHDESK_AI_TOKEN}`;
 
 export function generationOptions(task, env, providerName = 'zhipu') {
@@ -207,20 +207,35 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
   try {
     let generated = await generate(messages, 'initial');
     let data;
+    let outputFailure = '';
     try {
-      data = parseAiOutput(input.task, generated.content, input.context);
-    } catch {
-      if (attempts.length < maxAttempts) {
+      data = parseAiOutput(input.task, generated.content, input.context, { truncated: generated.truncated === true });
+    } catch (error) {
+      // Truncation cannot be repaired by asking again: the same output budget
+      // applies, so the retry would fail identically and cost another call.
+      outputFailure = error?.code || 'INVALID_JSON';
+      if (outputFailure !== 'TRUNCATED_OUTPUT' && attempts.length < maxAttempts) {
         const repairMessages = [...messages,
           { role: 'assistant', content: generated.content },
           { role: 'user', content: 'Return the same answer once more as valid JSON matching the required schema exactly. Do not add explanations or markdown.' },
         ];
         generated = await generate(repairMessages, 'format_repair');
-        try { data = parseAiOutput(input.task, generated.content, input.context); } catch { data = null; }
+        try {
+          data = parseAiOutput(input.task, generated.content, input.context, { truncated: generated.truncated === true });
+          outputFailure = '';
+        } catch (repairError) {
+          data = null;
+          outputFailure = repairError?.code || outputFailure;
+        }
+      }
+      if (!data && outputFailure === 'TRUNCATED_OUTPUT') {
+        return failure('TRUNCATED_OUTPUT', input.task === 'organize_lyrics'
+          ? '歌词内容过长，AI 输出被截断，请分成两部分再整理。'
+          : 'AI 输出被截断，请缩短输入后重试。', 502, origin, env, diagnostics(), 'truncated_output');
       }
       if (!data) return failure('INVALID_AI_OUTPUT', input.task === 'translate_article'
         ? '参考翻译段落未能正确对齐，请重试。'
-        : 'AI 输出格式错误', 502, origin, env, diagnostics());
+        : 'AI 输出格式错误', 502, origin, env, diagnostics(), outputFailure === 'INVALID_SCHEMA' ? 'invalid_schema' : 'invalid_json');
     }
     if (input.task === 'lookup_word' && (!data.memoryReading || !data.chineseReading)) {
       const incomplete = data;
@@ -252,8 +267,12 @@ export async function handleRequest(request, env, fetchImpl = fetch, pronunciati
       } else {
         lengthRewrite = true;
         generated = await generate(rewriteMessages, 'length_rewrite');
-        try { data = parseAiOutput(input.task, generated.content, input.context); }
-        catch { return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env, diagnostics()); }
+        try { data = parseAiOutput(input.task, generated.content, input.context, { truncated: generated.truncated === true }); }
+        catch (error) {
+          const code = error?.code || 'INVALID_JSON';
+          if (code === 'TRUNCATED_OUTPUT') return failure('TRUNCATED_OUTPUT', 'AI 输出被截断，请缩短输入后重试。', 502, origin, env, diagnostics(), 'truncated_output');
+          return failure('INVALID_AI_OUTPUT', 'AI 输出格式错误', 502, origin, env, diagnostics(), code === 'INVALID_SCHEMA' ? 'invalid_schema' : 'invalid_json');
+        }
         finalWordCount = englishWordCount(data.sentences[0].english);
       }
     }

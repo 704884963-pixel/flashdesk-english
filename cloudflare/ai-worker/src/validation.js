@@ -3,12 +3,86 @@ import { normalizeProvider } from './providers/index.js';
 export const TASKS = new Set(['generate_sentences', 'generate_article', 'translate_article', 'lookup_word', 'english_helper', 'organize_lyrics', 'explain_lyric']);
 const MAX_LYRICS_CHARS = 12000;
 
+// Models occasionally wrap the payload in a fence, add a sentence of prose, or
+// both. Extraction is deterministic and bounded: a fenced block is preferred, a
+// lone top-level object may be recovered from a small amount of surrounding
+// prose, and anything ambiguous is rejected instead of being guessed at.
+const MAX_SURROUNDING_PROSE = 500;
+const JSON_FENCE = /```(?:json|jsonc)?[ \t]*\r?\n([\s\S]*?)```/gi;
+
+function outputError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+const fencedBlocks = (text) => [...String(text).matchAll(JSON_FENCE)].map((match) => match[1].trim()).filter(Boolean);
+
 export function stripJsonFence(value) {
-  const text = String(value || '').trim();
+  const text = String(value ?? '').trim();
   if (!text.startsWith('```')) return text;
+  const blocks = fencedBlocks(text);
+  if (blocks.length === 1) return blocks[0];
   const lines = text.split(/\r?\n/);
   if (!/^```(?:json)?\s*$/i.test(lines[0]) || !/^```\s*$/.test(lines.at(-1))) return text;
   return lines.slice(1, -1).join('\n').trim();
+}
+
+// Walks the text once, ignoring braces inside JSON strings, and returns the
+// spans of every outermost `{...}` block.
+function topLevelObjectSpans(text) {
+  const spans = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{') {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (char === '}') {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        spans.push([start, index]);
+        start = -1;
+      }
+    }
+  }
+  return { spans, unterminated: depth > 0 || inString };
+}
+
+export function extractJsonText(value) {
+  const raw = String(value ?? '').replace(/^\uFEFF/, '').trim();
+  if (!raw) throw outputError('empty AI output', 'INVALID_JSON');
+  for (const candidate of [raw, ...fencedBlocks(raw)]) {
+    try {
+      JSON.parse(candidate);
+      return candidate;
+    } catch { /* try the next candidate */ }
+  }
+  const { spans, unterminated } = topLevelObjectSpans(raw);
+  if (spans.length === 1) {
+    const [start, end] = spans[0];
+    const surrounding = raw.slice(0, start).trim().length + raw.slice(end + 1).trim().length;
+    if (surrounding <= MAX_SURROUNDING_PROSE) {
+      try {
+        JSON.parse(raw.slice(start, end + 1));
+        return raw.slice(start, end + 1);
+      } catch { /* corrupt payload */ }
+    }
+  }
+  // Either the model stopped mid-payload or the braces never closed: that is a
+  // truncation, not a formatting quirk, and must not be reported as one.
+  throw outputError(unterminated ? 'truncated AI output' : 'invalid JSON', unterminated ? 'TRUNCATED_OUTPUT' : 'INVALID_JSON');
 }
 
 const nonempty = (value) => typeof value === 'string' && Boolean(value.trim());
@@ -57,20 +131,43 @@ export function validateAiData(task, data, context = {}) {
     return { answer: data.answer.trim() };
   }
   if (task === 'organize_lyrics') {
-    if (typeof data.title !== 'string' || typeof data.artist !== 'string'
-      || !Array.isArray(data.lines) || !data.lines.length
-      || !Array.isArray(data.ignored) || !Array.isArray(data.warnings)) throw new Error('invalid organized lyrics');
-    const lines = data.lines.map((line) => {
-      const originalChinese = line?.originalChinese === undefined ? '' : line.originalChinese;
-      if (!line || typeof line !== 'object' || Array.isArray(line)
-        || !nonempty(line.english) || typeof originalChinese !== 'string') throw new Error('invalid lyric line');
-      return { english: line.english.trim(), originalChinese: originalChinese.trim() };
-    });
-    const stringList = (value) => value.map((item) => {
-      if (typeof item !== 'string') throw new Error('invalid lyric notes');
-      return item.trim();
-    }).filter(Boolean);
-    return { title: data.title.trim(), artist: data.artist.trim(), lines, ignored: stringList(data.ignored), warnings: stringList(data.warnings) };
+    // `lines` stays the contract. A payload that names it `lyrics` is the same
+    // structure, so it is accepted only when `lines` is absent, never merged.
+    const rawLines = Array.isArray(data.lines) ? data.lines : (data.lines === undefined && Array.isArray(data.lyrics) ? data.lyrics : null);
+    const title = data.title === undefined ? '' : data.title;
+    const artist = data.artist === undefined ? '' : data.artist;
+    if (typeof title !== 'string' || typeof artist !== 'string' || !rawLines) throw new Error('invalid organized lyrics');
+    const markerKeys = ['section', 'type', 'label', 'marker', 'structure', 'part'];
+    const lines = [];
+    for (const item of rawLines) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid lyric line');
+      if (typeof item.english !== 'string' || !item.english.trim()) {
+        // Verse/Chorus/Outro markers are structure, not lyrics. They are dropped
+        // instead of failing the import; anything else missing `english` is real
+        // corruption and still fails.
+        const isStructureMarker = !('english' in item)
+          && markerKeys.some((key) => typeof item[key] === 'string' && item[key].trim());
+        if (isStructureMarker) continue;
+        throw new Error('invalid lyric line');
+      }
+      const originalChinese = item.originalChinese === undefined ? '' : item.originalChinese;
+      if (typeof originalChinese !== 'string') throw new Error('invalid lyric line');
+      lines.push({ english: item.english.trim(), originalChinese: originalChinese.trim() });
+    }
+    if (!lines.length) throw new Error('invalid organized lyrics');
+    // `ignored` and `warnings` are optional in practice: an empty array is the
+    // only sensible reading of an omitted or null value, and a lone string is
+    // the same note list with one item.
+    const stringList = (value) => {
+      if (value === undefined || value === null) return [];
+      const items = typeof value === 'string' ? [value] : value;
+      if (!Array.isArray(items)) throw new Error('invalid lyric notes');
+      return items.map((item) => {
+        if (typeof item !== 'string') throw new Error('invalid lyric notes');
+        return item.trim();
+      }).filter(Boolean);
+    };
+    return { title: title.trim(), artist: artist.trim(), lines, ignored: stringList(data.ignored), warnings: stringList(data.warnings) };
   }
   if (task === 'explain_lyric') {
     if (!nonempty(data.naturalChinese) || !Array.isArray(data.keyExpressions)
@@ -114,10 +211,16 @@ export function validateAiData(task, data, context = {}) {
   };
 }
 
-export function parseAiOutput(task, content, context = {}) {
+export function parseAiOutput(task, content, context = {}, { truncated = false } = {}) {
+  if (truncated) throw outputError('truncated AI output', 'TRUNCATED_OUTPUT');
+  const text = extractJsonText(content);
   let parsed;
-  try { parsed = JSON.parse(stripJsonFence(content)); } catch { throw new Error('invalid JSON'); }
-  return validateAiData(task, parsed, context);
+  try { parsed = JSON.parse(text); } catch { throw outputError('invalid JSON', 'INVALID_JSON'); }
+  try {
+    return validateAiData(task, parsed, context);
+  } catch (error) {
+    throw outputError(error?.message || 'invalid schema', 'INVALID_SCHEMA');
+  }
 }
 
 export function validateClientRequest(body) {

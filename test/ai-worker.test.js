@@ -150,6 +150,167 @@ test('organized lyrics return through the existing provider-neutral Worker route
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).data, organizedLyricsData);
 });
+
+// A messy real-world paste: intro line, emoji, Verse/Chorus markers, English
+// lines, Chinese translations, timestamps, credits and a background paragraph.
+const mixedSongPaste = [
+  '🎵 The Long Road (Official Lyric Video)',
+  '这是一首关于在深夜开车时想起旧朋友的歌，发行于 2013 年，属于民谣流行风格。',
+  '[Verse 1]',
+  'Streetlights blur behind the glass tonight',
+  '今晚路灯在玻璃后模糊成一片',
+  '🙂 we keep the radio low',
+  '我把电台声音调得很小',
+  '[Chorus]',
+  'Hold the wheel and let the miles go by',
+  '握紧方向盘，让里程一里一里过去',
+  '[Outro]',
+  '00:00 / 03:42',
+  'Lyrics provided by Example Music Site',
+  '背景介绍：这首歌是主唱在巡演巴士上写的，记录了他和乐队成员多年后的重聚。',
+].join('\n');
+// What the model answers for that paste: same lines, translations paired,
+// non-lyric noise moved into ignored. Nothing added from memory.
+const mixedSongAnswer = {
+  title: 'The Long Road', artist: '',
+  lines: [
+    { english: 'Streetlights blur behind the glass tonight', originalChinese: '今晚路灯在玻璃后模糊成一片' },
+    { english: 'we keep the radio low', originalChinese: '我把电台声音调得很小' },
+    { english: 'Hold the wheel and let the miles go by', originalChinese: '握紧方向盘，让里程一里一里过去' },
+  ],
+  ignored: ['🎵 The Long Road (Official Lyric Video)', 'Verse 1', 'Chorus', 'Outro', '00:00 / 03:42', 'Lyrics provided by Example Music Site'],
+  warnings: [],
+};
+
+test('lyrics answer inside a ```json fence with surrounding prose still parses', async () => {
+  const { parseAiOutput } = await load('validation.js');
+  const content = `好的，已按原样整理：\n\`\`\`json\n${JSON.stringify(mixedSongAnswer)}\n\`\`\`\n以上共三行歌词。`;
+  const data = parseAiOutput('organize_lyrics', content);
+  assert.equal(data.lines.length, 3);
+  assert.equal(data.lines[0].english, 'Streetlights blur behind the glass tonight');
+});
+
+test('lyrics answer with only leading prose keeps the single top-level object', async () => {
+  const { parseAiOutput } = await load('validation.js');
+  const data = parseAiOutput('organize_lyrics', `Here is the result:\n${JSON.stringify(mixedSongAnswer)}\nDone.`);
+  assert.equal(data.lines.length, 3);
+});
+
+test('lyrics answer with two top-level objects is rejected as ambiguous', async () => {
+  const { parseAiOutput } = await load('validation.js');
+  const content = `${JSON.stringify(mixedSongAnswer)}\n示例格式：${JSON.stringify({ title: '', artist: '', lines: [] })}`;
+  assert.throws(() => parseAiOutput('organize_lyrics', content), /invalid JSON/);
+});
+
+test('missing optional ignored and warnings normalize to empty arrays', async () => {
+  const { validateAiData } = await load('validation.js');
+  const { ignored, warnings, ...withoutNotes } = mixedSongAnswer;
+  const data = validateAiData('organize_lyrics', withoutNotes);
+  assert.deepEqual(data.ignored, []);
+  assert.deepEqual(data.warnings, []);
+  assert.deepEqual(validateAiData('organize_lyrics', { ...mixedSongAnswer, ignored: null, warnings: undefined }).warnings, []);
+});
+
+test('a single ignored note string is read as a one-item list', async () => {
+  const { validateAiData } = await load('validation.js');
+  assert.deepEqual(validateAiData('organize_lyrics', { ...mixedSongAnswer, ignored: ' 00:00 / 03:42 ' }).ignored, ['00:00 / 03:42']);
+});
+
+test('verse markers inside lines are dropped instead of failing the import', async () => {
+  const { validateAiData } = await load('validation.js');
+  const data = validateAiData('organize_lyrics', {
+    ...mixedSongAnswer,
+    lines: [{ section: 'Verse 1' }, ...mixedSongAnswer.lines, { type: 'Chorus' }],
+  });
+  assert.equal(data.lines.length, 3);
+  assert.equal(data.lines[0].english, 'Streetlights blur behind the glass tonight');
+});
+
+test('a lyrics key is accepted only when lines is absent', async () => {
+  const { validateAiData } = await load('validation.js');
+  const { lines, ...rest } = mixedSongAnswer;
+  assert.equal(validateAiData('organize_lyrics', { ...rest, lyrics: lines }).lines.length, 3);
+  assert.throws(() => validateAiData('organize_lyrics', { ...rest, lines: [], lyrics: lines }), /organized lyrics/);
+});
+
+test('a lyric line with a non-string english value still fails', async () => {
+  const { validateAiData } = await load('validation.js');
+  assert.throws(() => validateAiData('organize_lyrics', { ...mixedSongAnswer, lines: [{ english: 123 }] }), /lyric line/);
+  assert.throws(() => validateAiData('organize_lyrics', { ...mixedSongAnswer, lines: [{ originalChinese: '只有中文' }] }), /lyric line/);
+});
+
+test('lyrics without any usable line still fail as invalid schema', async () => {
+  const { validateAiData } = await load('validation.js');
+  assert.throws(() => validateAiData('organize_lyrics', { ...mixedSongAnswer, lines: [{ section: 'Verse 1' }] }), /organized lyrics/);
+});
+
+test('a truncated lyrics answer is reported as truncation and never retried', async () => {
+  const { handleRequest } = await load('index.js');
+  let calls = 0;
+  const cut = JSON.stringify(mixedSongAnswer).slice(0, 150);
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: mixedSongPaste }), env, async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: cut }, finish_reason: 'length' }], usage: {} }), { status: 200 });
+  }, undefined, Date.now, async () => {});
+  const body = await response.json();
+  assert.equal(calls, 1);
+  assert.equal(body.error.code, 'TRUNCATED_OUTPUT');
+  assert.equal(body.error.reason, 'truncated_output');
+  assert.equal(body.attemptCount, 1);
+});
+
+test('an unterminated lyrics payload without a finish reason still reads as truncation', async () => {
+  const { parseAiOutput } = await load('validation.js');
+  assert.throws(() => parseAiOutput('organize_lyrics', JSON.stringify(mixedSongAnswer).slice(0, 200)), (error) => error.code === 'TRUNCATED_OUTPUT');
+});
+
+test('structurally wrong lyric lines report invalid_schema after one repair attempt', async () => {
+  const { handleRequest } = await load('index.js');
+  let calls = 0;
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: mixedSongPaste }), env, async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ ...mixedSongAnswer, lines: 'oops' }) }, finish_reason: 'stop' }], usage: {} }), { status: 200 });
+  }, undefined, Date.now, async () => {});
+  const body = await response.json();
+  assert.equal(calls, 2);
+  assert.equal(body.error.code, 'INVALID_AI_OUTPUT');
+  assert.equal(body.error.reason, 'invalid_schema');
+});
+
+test('malformed JSON reports invalid_json instead of a generic format error', async () => {
+  const { handleRequest } = await load('index.js');
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: mixedSongPaste }), env, async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"x",}' }, finish_reason: 'stop' }], usage: {} }), { status: 200 }), undefined, Date.now, async () => {});
+  const body = await response.json();
+  assert.equal(body.error.code, 'INVALID_AI_OUTPUT');
+  assert.equal(body.error.reason, 'invalid_json');
+});
+
+test('a full messy song paste round-trips without rewriting the supplied lyrics', async () => {
+  const { handleRequest } = await load('index.js');
+  const answer = `这是整理结果：\n\`\`\`json\n${JSON.stringify(mixedSongAnswer)}\n\`\`\``;
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: mixedSongPaste }), env, upstream(answer));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.data.lines.map((line) => line.english).join('|'), mixedSongAnswer.lines.map((line) => line.english).join('|'));
+  assert.equal(body.data.lines[1].english, 'we keep the radio low');
+  assert.equal(body.data.lines[1].originalChinese, '我把电台声音调得很小');
+  assert.ok(body.data.ignored.includes('00:00 / 03:42'));
+  assert.equal(body.attemptCount, 1);
+});
+
+test('a full-length song fits the organize_lyrics output budget', async () => {
+  const { TASK_OUTPUT_TOKEN_LIMITS } = await load('index.js');
+  const lines = Array.from({ length: 55 }, (_, index) => ({
+    english: `And the streetlight keeps on burning through the window number ${index}`,
+    originalChinese: `街灯透过窗户继续燃烧，这是第 ${index} 行的中文翻译`,
+  }));
+  const payload = JSON.stringify({ title: 'The Long Road', artist: '', lines, ignored: Array.from({ length: 8 }, () => '背景介绍：这段文字被原样放入 ignored'), warnings: [] });
+  const ascii = (payload.match(/[\x00-\x7F]/g) || []).length;
+  const nonAscii = payload.length - ascii;
+  const estimatedTokens = Math.round(ascii / 3.6 + nonAscii);
+  assert.ok(estimatedTokens > 2400, `fixture should exceed the old 2400 budget, got ${estimatedTokens}`);
+  assert.ok(estimatedTokens <= TASK_OUTPUT_TOKEN_LIMITS.organize_lyrics, `budget must cover a full song, got ${estimatedTokens}`);
+});
 test('Article translation request keeps only title and the paragraph array', async () => { const { validateClientRequest } = await load('validation.js'); const result = validateClientRequest({ task: 'translate_article', context: { title: ' Title ', paragraphs: [' First. ', ' Second. '], cards: ['private'], history: ['private'] }, options: { count: 99 } }); assert.deepEqual(result, { task: 'translate_article', context: { title: 'Title', paragraphs: ['First.', 'Second.'] }, options: {}, provider: 'zhipu' }); });
 test('unknown task is rejected', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(request('chat'), env, upstream('{}')); assert.equal(response.status, 400); });
 test('Worker rejects missing auth', async () => { const { handleRequest } = await load('index.js'); const response = await handleRequest(new Request('https://worker.example/health'), env, upstream('{}')); assert.equal(response.status, 401); });
@@ -224,7 +385,7 @@ test('lookup_word timeout is 15 seconds', async () => { const { generationOption
 test('english_helper uses lookup model with thinking off and a small output budget', async () => { const { generationOptions } = await load('index.js'); assert.deepEqual(generationOptions('english_helper', env), { model: 'glm-4.5-air', maxOutputTokens: 520, temperature: 0.1, reasoning: false, timeoutMs: 15000 }); });
 test('organize_lyrics uses the fast configured model with its own bounded deadline', async () => {
   const { generationOptions } = await load('index.js');
-  assert.deepEqual(generationOptions('organize_lyrics', env), { model: 'glm-4.5-air', maxOutputTokens: 2400, temperature: 0.1, reasoning: false, timeoutMs: 60000 });
+  assert.deepEqual(generationOptions('organize_lyrics', env), { model: 'glm-4.5-air', maxOutputTokens: 4096, temperature: 0.1, reasoning: false, timeoutMs: 60000 });
   assert.equal(generationOptions('lookup_word', env).timeoutMs, 15000);
   assert.equal(generationOptions('generate_sentences', env).timeoutMs, 45000);
   assert.equal(generationOptions('generate_article', env).timeoutMs, 60000);
@@ -507,7 +668,7 @@ test('pronunciation correction usage is included in aggregate attempts', async (
 });
 test('all text tasks have centralized output token and total attempt budgets', async () => {
   const { TASK_OUTPUT_TOKEN_LIMITS, TASK_ATTEMPT_LIMITS, generationOptions } = await load('index.js');
-  assert.deepEqual(TASK_OUTPUT_TOKEN_LIMITS, { generate_sentences: 800, generate_article: 2400, translate_article: 2000, lookup_word: 480, english_helper: 520, organize_lyrics: 2400, explain_lyric: 700 });
+  assert.deepEqual(TASK_OUTPUT_TOKEN_LIMITS, { generate_sentences: 800, generate_article: 2400, translate_article: 2000, lookup_word: 480, english_helper: 520, organize_lyrics: 4096, explain_lyric: 700 });
   assert.deepEqual(TASK_ATTEMPT_LIMITS, { generate_sentences: 3, generate_article: 2, translate_article: 2, lookup_word: 3, english_helper: 2, organize_lyrics: 2, explain_lyric: 2 });
   for (const [task, limit] of Object.entries(TASK_OUTPUT_TOKEN_LIMITS)) assert.equal(generationOptions(task, env).maxOutputTokens, limit);
 });

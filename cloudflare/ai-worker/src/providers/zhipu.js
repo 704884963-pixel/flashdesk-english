@@ -41,7 +41,7 @@ export function createZhipuProvider(env, fetchImpl = fetch) {
         const content = payload?.choices?.[0]?.message?.content;
         if (typeof content !== 'string') throw new ProviderError('Zhipu returned no text', { code: 'INVALID_PROVIDER_RESPONSE' });
         const usage = payload?.usage || {};
-        return { content, usage: {
+        return { content, truncated: String(payload?.choices?.[0]?.finish_reason || '').toLowerCase() === 'length', usage: {
           inputTokens: Number.isFinite(usage.prompt_tokens) ? usage.prompt_tokens : null,
           outputTokens: Number.isFinite(usage.completion_tokens) ? usage.completion_tokens : null,
           totalTokens: Number.isFinite(usage.total_tokens) ? usage.total_tokens : null,

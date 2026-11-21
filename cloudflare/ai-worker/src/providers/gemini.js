@@ -84,6 +84,7 @@ export function createGeminiProvider(env, fetchImpl = fetch) {
         const usage = payload?.usageMetadata || {};
         return {
           content,
+          truncated: String(payload?.candidates?.[0]?.finishReason || '').toUpperCase() === 'MAX_TOKENS',
           usage: {
             inputTokens: Number.isFinite(usage.promptTokenCount) ? usage.promptTokenCount : null,
             outputTokens: Number.isFinite(usage.candidatesTokenCount) ? usage.candidatesTokenCount : null,
