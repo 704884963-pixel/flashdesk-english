@@ -383,12 +383,40 @@ test('Sentence and Article generation use AI_MODEL while lookup keeps AI_LOOKUP_
 });
 test('lookup_word timeout is 15 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('lookup_word', env).timeoutMs, 15000); });
 test('english_helper uses lookup model with thinking off and a small output budget', async () => { const { generationOptions } = await load('index.js'); assert.deepEqual(generationOptions('english_helper', env), { model: 'glm-4.5-air', maxOutputTokens: 520, temperature: 0.1, reasoning: false, timeoutMs: 15000 }); });
-test('organize_lyrics uses the fast configured model with its own bounded deadline', async () => {
+test('organize_lyrics uses the primary model with its own bounded deadline', async () => {
   const { generationOptions } = await load('index.js');
-  assert.deepEqual(generationOptions('organize_lyrics', env), { model: 'glm-4.5-air', maxOutputTokens: 4096, temperature: 0.1, reasoning: false, timeoutMs: 60000 });
+  assert.deepEqual(generationOptions('organize_lyrics', env), { model: 'glm-5.2', maxOutputTokens: 4096, temperature: 0.1, reasoning: false, timeoutMs: 60000 });
+  assert.equal(generationOptions('lookup_word', env).model, 'glm-4.5-air');
   assert.equal(generationOptions('lookup_word', env).timeoutMs, 15000);
   assert.equal(generationOptions('generate_sentences', env).timeoutMs, 45000);
   assert.equal(generationOptions('generate_article', env).timeoutMs, 60000);
+});
+test('organize_lyrics ignores AI_LOOKUP_MODEL and follows AI_MODEL', async () => {
+  const { generationOptions } = await load('index.js');
+  const configured = { ...env, AI_MODEL: 'primary-model', AI_LOOKUP_MODEL: 'lookup-model', AI_TRANSLATION_MODEL: 'translation-model' };
+  assert.equal(generationOptions('organize_lyrics', configured).model, 'primary-model');
+  assert.equal(generationOptions('lookup_word', configured).model, 'lookup-model');
+  assert.equal(generationOptions('english_helper', configured).model, 'lookup-model');
+  assert.equal(generationOptions('explain_lyric', configured).model, 'lookup-model');
+  assert.equal(generationOptions('translate_article', configured).model, 'translation-model');
+  assert.equal(generationOptions('generate_article', configured).model, 'primary-model');
+  assert.equal(generationOptions('generate_sentences', configured).model, 'primary-model');
+});
+test('organize_lyrics initial and format_repair both use the primary model', async () => {
+  const { handleRequest } = await load('index.js');
+  const payloads = [];
+  const fetchImpl = async (_url, init) => {
+    payloads.push(JSON.parse(init.body));
+    return payloads.length === 1
+      ? (await upstream('{"title": "The Nights" "artist": "Avicii"}'))()
+      : (await upstream(JSON.stringify(organizedLyricsData)))();
+  };
+  const response = await handleRequest(request('organize_lyrics', { rawLyrics: 'Once upon a younger year' }), env, fetchImpl, undefined, Date.now, async () => {});
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.attemptsSummary.map((item) => item.reason), ['initial', 'format_repair']);
+  assert.deepEqual(payloads.map((payload) => payload.model), ['glm-5.2', 'glm-5.2']);
+  assert.deepEqual(payloads.map((payload) => payload.max_tokens), [4096, 4096]);
 });
 test('generate_sentences timeout is 45 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('generate_sentences', env).timeoutMs, 45000); });
 test('generate_article timeout is 60 seconds', async () => { const { generationOptions } = await load('index.js'); assert.equal(generationOptions('generate_article', env).timeoutMs, 60000); });

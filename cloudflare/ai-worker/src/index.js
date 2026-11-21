@@ -55,13 +55,22 @@ export function generationOptions(task, env, providerName = 'zhipu') {
         : task === 'generate_sentences' ? 45000 : 60000,
     };
   }
-  if (task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric' || task === 'organize_lyrics') {
+  if (task === 'organize_lyrics') {
+    return {
+      model: env.AI_MODEL,
+      maxOutputTokens,
+      temperature: 0.1,
+      reasoning: false,
+      timeoutMs: 60000,
+    };
+  }
+  if (task === 'lookup_word' || task === 'english_helper' || task === 'explain_lyric') {
     return {
       model: env.AI_LOOKUP_MODEL || env.AI_MODEL,
       maxOutputTokens,
       temperature: 0.1,
       reasoning: false,
-      timeoutMs: task === 'organize_lyrics' ? 60000 : 15000,
+      timeoutMs: 15000,
     };
   }
   if (task === 'translate_article') {
