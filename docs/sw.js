@@ -2,7 +2,7 @@
 // Static assets come from the current content-hashed cache. HTML navigations
 // prefer the network so an installed PWA does not remain pinned to an old shell.
 
-const CACHE = 'flashdesk-bcf00f4077';
+const CACHE = 'flashdesk-edb945d504';
 const ASSETS = [
   './',
   'index.html',
